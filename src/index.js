@@ -1,39 +1,28 @@
 #!/usr/bin/env node
 /**
- * excalidraw-mcp — MCP server for Excalidraw & ExcaliDash
+ * excalidash-mcp — MCP server for live drawing on ExcaliDash
  *
- * Providers:
- *   excalidash  — REST + Socket.IO (live updates)
- *   file        — .excalidraw JSON files (offline)
- *
- * Set EXCALIDRAW_MCP_PROVIDER=file|excalidash (default: auto-detect)
+ * Env vars:
+ *   EXCALIDASH_BACKEND_URL  Backend API URL (default: http://127.0.0.1:6768)
+ *   EXCALIDASH_URL          Public frontend URL (default: http://localhost:6767)
+ *   EXCALIDASH_EMAIL        Login email
+ *   EXCALIDASH_PASSWORD     Login password
+ *   EXCALIDASH_PROXY_PROTO  Optional: "https" if behind reverse proxy
+ *   EXCALIDASH_PROXY_HOST   Optional: hostname for proxy Host header
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import { enrichElement, parseDSL, resolveColor, resolveFill, makeId, FONT_WIDTH } from "./elements.js";
-import { ExcaliDashProvider } from "./providers/excalidash.js";
-import { FileProvider } from "./providers/file.js";
+import { ExcaliDashProvider } from "./excalidash.js";
 
-// ============================================================
-// Provider selection
-// ============================================================
-function createProvider() {
-  const mode = (process.env.EXCALIDRAW_MCP_PROVIDER || "").toLowerCase();
-  if (mode === "file") return new FileProvider();
-  if (mode === "excalidash") return new ExcaliDashProvider();
-  // Auto-detect: if ExcaliDash env vars are set, use ExcaliDash
-  if (process.env.EXCALIDASH_BACKEND_URL || process.env.EXCALIDASH_EMAIL) return new ExcaliDashProvider();
-  return new FileProvider();
-}
-
-const provider = createProvider();
+const provider = new ExcaliDashProvider();
 
 // ============================================================
 // Core: push elements + persist
 // ============================================================
 async function pushElements(boardId, newElements, mode = "append") {
-  if (provider.supportsLive) await provider.joinRoom(boardId);
+  await provider.joinRoom(boardId);
 
   const existing = await provider.getDrawing(boardId);
   if (!existing) throw new Error(`Board ${boardId} not found`);
@@ -66,10 +55,7 @@ async function pushElements(boardId, newElements, mode = "append") {
 
   const elementOrder = merged.map(e => e.id);
 
-  if (provider.supportsLive) {
-    await provider.pushLive(boardId, socketElements, elementOrder);
-  }
-
+  await provider.pushLive(boardId, socketElements, elementOrder);
   await provider.updateDrawing(boardId, merged);
 
   const active = merged.filter(e => !e.isDeleted).length;
@@ -81,7 +67,7 @@ async function pushElements(boardId, newElements, mode = "append") {
 // MCP Server
 // ============================================================
 const server = new McpServer({
-  name: "excalidraw-mcp",
+  name: "excalidash-mcp",
   version: "0.1.0",
 });
 
@@ -100,7 +86,7 @@ server.registerTool("list_boards", {
 });
 
 server.registerTool("create_board", {
-  description: "Create a new board. Returns URL/path + ID.",
+  description: "Create a new board. Returns URL + ID.",
   inputSchema: z.object({ name: z.string().describe("Board name") }),
 }, async ({ name }) => {
   try {
@@ -247,7 +233,7 @@ server.registerTool("update_element", {
 }, async ({ board_id, element_id, props }) => {
   try {
     const changes = JSON.parse(props);
-    if (provider.supportsLive) await provider.joinRoom(board_id);
+    await provider.joinRoom(board_id);
     const existing = await provider.getDrawing(board_id);
     if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
 
@@ -275,7 +261,7 @@ server.registerTool("update_element", {
     }
 
     els[idx] = updated;
-    if (provider.supportsLive) await provider.pushLive(board_id, [updated], els.map(e => e.id));
+    await provider.pushLive(board_id, [updated], els.map(e => e.id));
     await provider.updateDrawing(board_id, els);
 
     return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(changes).join(", ")})` }] };
@@ -294,7 +280,7 @@ server.registerTool("delete_elements", {
       const r = await pushElements(board_id, [], "replace");
       return { content: [{ type: "text", text: `Cleared board.` }] };
     }
-    if (provider.supportsLive) await provider.joinRoom(board_id);
+    await provider.joinRoom(board_id);
     const existing = await provider.getDrawing(board_id);
     if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
 
@@ -307,17 +293,17 @@ server.registerTool("delete_elements", {
       return e;
     });
     const deleted = els.filter(e => deleteSet.has(e.id));
-    if (provider.supportsLive) await provider.pushLive(board_id, deleted, els.map(e => e.id));
+    await provider.pushLive(board_id, deleted, els.map(e => e.id));
     await provider.updateDrawing(board_id, els);
 
     return { content: [{ type: "text", text: `Deleted ${deleted.length} elements.` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
-// --- Library (ExcaliDash only) ---
+// --- Library ---
 
 server.registerTool("get_library", {
-  description: "List available library items (icons, templates). ExcaliDash only.",
+  description: "List available library items (icons, templates).",
   annotations: { readOnlyHint: true },
   inputSchema: z.object({
     search: z.string().optional().describe("Filter by name"),
@@ -326,7 +312,7 @@ server.registerTool("get_library", {
 }, async ({ search, limit }) => {
   try {
     const items = await provider.getLibrary();
-    if (!items.length) return { content: [{ type: "text", text: "Library empty or not supported." }] };
+    if (!items.length) return { content: [{ type: "text", text: "Library empty." }] };
     let filtered = items;
     if (search) {
       const q = search.toLowerCase();
@@ -341,7 +327,7 @@ server.registerTool("get_library", {
 });
 
 server.registerTool("add_from_library", {
-  description: "Add a library item to a board by name. ExcaliDash only.",
+  description: "Add a library item to a board by name.",
   inputSchema: z.object({
     board_id: z.string(),
     name: z.string().describe("Library item name (exact or partial)"),
@@ -351,7 +337,7 @@ server.registerTool("add_from_library", {
 }, async ({ board_id, name, x, y, scale }) => {
   try {
     const items = await provider.getLibrary();
-    if (!items.length) return { content: [{ type: "text", text: "Library not supported." }], isError: true };
+    if (!items.length) return { content: [{ type: "text", text: "Library empty." }], isError: true };
     const q = name.toLowerCase();
     const item = items.find(i => (i.name || "").toLowerCase() === q)
       || items.find(i => (i.name || "").toLowerCase().includes(q));

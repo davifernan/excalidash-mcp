@@ -10,11 +10,9 @@
  *   EXCALIDASH_PROXY_HOST   (optional: hostname for Host header)
  */
 import { io } from "socket.io-client";
-import { BaseProvider } from "./base.js";
 
-export class ExcaliDashProvider extends BaseProvider {
+export class ExcaliDashProvider {
   constructor(opts = {}) {
-    super();
     this.backendUrl = opts.backendUrl || process.env.EXCALIDASH_BACKEND_URL || "http://127.0.0.1:6768";
     this.publicUrl = opts.publicUrl || process.env.EXCALIDASH_URL || "http://localhost:6767";
     this.email = opts.email || process.env.EXCALIDASH_EMAIL || "";
@@ -33,8 +31,6 @@ export class ExcaliDashProvider extends BaseProvider {
     this.socket = null;
     this.joinedRooms = new Set();
   }
-
-  get supportsLive() { return true; }
 
   getUrl(drawingId) { return `${this.publicUrl}/editor/${drawingId}`; }
 
@@ -131,7 +127,7 @@ export class ExcaliDashProvider extends BaseProvider {
     });
   }
 
-  // --- Provider interface ---
+  // --- API ---
   async getDrawing(id) { return this.#get(`/drawings/${id}`); }
   async createDrawing(name, elements, appState = {}, files = {}) {
     return this.#post("/drawings", { name, elements, appState, files });

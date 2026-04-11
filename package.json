@@ -1,11 +1,11 @@
 {
-  "name": "excalidraw-mcp",
+  "name": "excalidash-mcp",
   "version": "0.1.0",
-  "description": "MCP server for live drawing on Excalidraw & ExcaliDash",
+  "description": "MCP server for live drawing on ExcaliDash — with Socket.IO live updates",
   "type": "module",
   "main": "src/index.js",
   "bin": {
-    "excalidraw-mcp": "src/index.js"
+    "excalidash-mcp": "src/index.js"
   },
   "scripts": {
     "start": "node src/index.js"
