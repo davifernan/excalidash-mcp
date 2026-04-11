@@ -1,0 +1,20 @@
+{
+  "name": "excalidraw-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for live drawing on Excalidraw & ExcaliDash",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "excalidraw-mcp": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "keywords": ["mcp", "excalidraw", "excalidash", "diagram", "live-draw", "whiteboard"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "socket.io-client": "^4.8.1",
+    "zod": "^3.25.20"
+  }
+}
