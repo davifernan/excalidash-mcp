@@ -418,6 +418,53 @@ server.registerTool("draw_to_board", {
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
+// --- Export / Screenshot ---
+
+let _browser = null;
+async function getBrowser() {
+  if (_browser?.isConnected()) return _browser;
+  const { chromium } = await import("playwright");
+  _browser = await chromium.launch({ args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  return _browser;
+}
+
+server.registerTool("export_png", {
+  description: "Export a board (or any URL) as a PNG screenshot. Returns the file path.",
+  inputSchema: z.object({
+    board_id: z.string().optional().describe("Board ID to screenshot (uses ExcaliDash URL)"),
+    url: z.string().optional().describe("Or: any URL to screenshot instead"),
+    output: z.string().optional().describe("Output file path (default: /tmp/excalidash-export-{timestamp}.png)"),
+    width: z.number().optional().describe("Viewport width (default 1920)"),
+    height: z.number().optional().describe("Viewport height (default 1080)"),
+    wait: z.number().optional().describe("Wait ms after load (default 2000)"),
+    full_page: z.boolean().optional().describe("Capture full page (default false)"),
+  }),
+}, async ({ board_id, url, output, width, height, wait, full_page }) => {
+  try {
+    const targetUrl = url || (board_id ? provider.getUrl(board_id) : null);
+    if (!targetUrl) return { content: [{ type: "text", text: "Provide board_id or url" }], isError: true };
+
+    const outPath = output || `/tmp/excalidash-export-${Date.now()}.png`;
+    const browser = await getBrowser();
+    const page = await browser.newPage({ viewport: { width: width || 1920, height: height || 1080 } });
+
+    await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 15000 });
+    await page.waitForTimeout(wait || 2000);
+
+    // Hide ExcaliDash UI elements for a clean screenshot
+    await page.evaluate(() => {
+      for (const sel of [".main-menu-trigger", "[class*='header']", "[class*='toolbar']", "[class*='sidebar']"]) {
+        document.querySelectorAll(sel).forEach(el => el.style.display = "none");
+      }
+    }).catch(() => {});
+
+    await page.screenshot({ path: outPath, fullPage: full_page || false });
+    await page.close();
+
+    return { content: [{ type: "text", text: `Screenshot saved: ${outPath}` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
 // ============================================================
 async function main() { await server.connect(new StdioServerTransport()); }
 main().catch((e) => { console.error(e); process.exit(1); });
