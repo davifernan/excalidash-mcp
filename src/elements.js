@@ -299,8 +299,12 @@ export function createBoundArrow(arrowProps, fromShapeId, toShapeId, allElements
 //   arrow 300,150 -> 400,150 from=frontend to=backend color=gray 'API'
 // ============================================================
 export function parseDSL(dsl) {
+  // Two-pass parsing:
+  // Pass 1: Parse all lines into intermediate records, create shapes first
+  // Pass 2: Resolve arrow bindings (from=/to=) now that all shapes exist
   const elements = [];
-  const idMap = new Map(); // DSL ID -> element
+  const idMap = new Map();
+  const deferredArrows = []; // arrows with from=/to= to resolve in pass 2
 
   for (const raw of dsl.split("\n")) {
     const line = raw.trim();
@@ -392,36 +396,33 @@ export function parseDSL(dsl) {
         arrowEl.endArrowhead = props.end === "none" ? null : (props.end || "arrow");
       }
 
-      // Use DSL ID as element ID
       if (dslId) arrowEl.id = dslId;
 
-      // Bindings
-      let arrow;
       if (props.from || props.to) {
-        arrow = createBoundArrow(arrowEl, props.from, props.to, elements);
+        // Defer to pass 2 — target shapes may not exist yet
+        deferredArrows.push({ arrowEl, from: props.from, to: props.to, dslId, text, props });
       } else {
-        arrow = enrichElement(arrowEl);
-      }
-      if (dslId) idMap.set(dslId, arrow);
-      elements.push(arrow);
-
-      // Arrow label (positioned at arrow midpoint, offset to not overlap)
-      if (text) {
-        const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 13;
-        const labelWidth = text.length * labelFontSize * 0.55;
-        const aw = arrow.width || 0, ah = arrow.height || 0;
-        const isVertical = Math.abs(ah) > Math.abs(aw);
-        // Offset label to the side of the arrow
-        const offsetX = isVertical ? 10 : -labelWidth / 2;
-        const offsetY = isVertical ? -labelFontSize / 2 : -labelFontSize - 4;
-        elements.push(enrichElement({
-          type: "text",
-          x: arrow.x + aw / 2 + offsetX,
-          y: arrow.y + ah / 2 + offsetY,
-          text, fontSize: labelFontSize, fontFamily: 3,
-          strokeColor: resolveColor(props.color || "gray"),
-          strokeWidth: 1, roughness: 0,
-        }));
+        // No binding — create immediately
+        const arrow = enrichElement(arrowEl);
+        if (dslId) idMap.set(dslId, arrow);
+        elements.push(arrow);
+        // Arrow label
+        if (text) {
+          const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 13;
+          const labelWidth = text.length * labelFontSize * 0.55;
+          const aw = arrow.width || 0, ah = arrow.height || 0;
+          const isVertical = Math.abs(ah) > Math.abs(aw);
+          const offsetX = isVertical ? 10 : -labelWidth / 2;
+          const offsetY = isVertical ? -labelFontSize / 2 : -labelFontSize - 4;
+          elements.push(enrichElement({
+            type: "text",
+            x: arrow.x + aw / 2 + offsetX,
+            y: arrow.y + ah / 2 + offsetY,
+            text, fontSize: labelFontSize, fontFamily: 3,
+            strokeColor: resolveColor(props.color || "gray"),
+            strokeWidth: 1, roughness: 0,
+          }));
+        }
       }
 
     } else {
@@ -454,6 +455,30 @@ export function parseDSL(dsl) {
         if (dslId) idMap.set(dslId, shape);
         elements.push(shape);
       }
+    }
+  }
+
+  // Pass 2: Resolve deferred arrows (from=/to= bindings)
+  for (const { arrowEl, from, to, dslId, text, props } of deferredArrows) {
+    const arrow = createBoundArrow(arrowEl, from, to, elements);
+    if (dslId) idMap.set(dslId, arrow);
+    elements.push(arrow);
+
+    if (text) {
+      const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 13;
+      const labelWidth = text.length * labelFontSize * 0.55;
+      const aw = arrow.width || 0, ah = arrow.height || 0;
+      const isVertical = Math.abs(ah) > Math.abs(aw);
+      const offsetX = isVertical ? 10 : -labelWidth / 2;
+      const offsetY = isVertical ? -labelFontSize / 2 : -labelFontSize - 4;
+      elements.push(enrichElement({
+        type: "text",
+        x: arrow.x + aw / 2 + offsetX,
+        y: arrow.y + ah / 2 + offsetY,
+        text, fontSize: labelFontSize, fontFamily: 3,
+        strokeColor: resolveColor(props.color || "gray"),
+        strokeWidth: 1, roughness: 0,
+      }));
     }
   }
 
