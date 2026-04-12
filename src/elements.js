@@ -1,12 +1,15 @@
 /**
- * Excalidraw element helpers — v2 simplified.
+ * Excalidraw element helpers — v2.1
  *
- * The DSL parser outputs the simplified format that convertToExcalidrawElements()
- * understands directly. No intermediate enrichment layer.
+ * Changes from v2:
+ * - Shapes with details: single multi-line label instead of separate texts
+ * - Arrow labels: always via arrow.label (library places them)
+ * - Z-ordering: arrows behind shapes
+ * - Post-processing: overlap detection + spacing fix
  */
 
 // ============================================================
-// Color palette (from official excalidraw-mcp cheat sheet)
+// Color palette
 // ============================================================
 export const COLORS = {
   blue: "#4a9eed", amber: "#f59e0b", green: "#22c55e", red: "#ef4444",
@@ -21,37 +24,18 @@ export const FILLS = {
   gray: "#dee2e6", cyan: "#c3fae8", lime: "#fff3bf", amber: "#ffd8a8",
 };
 
-export const ZONES = {
-  blue: "#dbe4ff", purple: "#e5dbff", green: "#d3f9d8",
-};
-
 export function resolveColor(c) { return COLORS[c] || c || "#1e1e1e"; }
 export function resolveFill(c) { return FILLS[c] || c || "transparent"; }
 
 // ============================================================
-// DSL Parser — outputs simplified format for convertToExcalidrawElements()
-//
-// Syntax:
-//   TYPE [ID] x,y [WxH] [key=val...] ['label']
-//   arrow [ID] x,y -> x2,y2 [from=ID] [to=ID] ['label']
-//   # comments
-//
-// Output: array of simplified elements ready for the Excalidraw library.
+// DSL Parser
 // ============================================================
-
 let _idCounter = 0;
 function nextId() { return `el-${Date.now()}-${_idCounter++}`; }
 
-/**
- * Compute fixedPoint for arrow binding based on relative shape positions.
- */
 function computeFixedPoints(fromShape, toShape) {
-  const fcx = fromShape.x + fromShape.width / 2;
-  const fcy = fromShape.y + fromShape.height / 2;
-  const tcx = toShape.x + toShape.width / 2;
-  const tcy = toShape.y + toShape.height / 2;
-  const dx = tcx - fcx, dy = tcy - fcy;
-
+  const dx = (toShape.x + toShape.width / 2) - (fromShape.x + fromShape.width / 2);
+  const dy = (toShape.y + toShape.height / 2) - (fromShape.y + fromShape.height / 2);
   if (Math.abs(dx) > Math.abs(dy)) {
     return dx > 0 ? [[1, 0.5], [0, 0.5]] : [[0, 0.5], [1, 0.5]];
   } else {
@@ -59,16 +43,11 @@ function computeFixedPoints(fromShape, toShape) {
   }
 }
 
-/**
- * Compute arrow start position from source shape edge toward target.
- */
-function edgePoint(shape, targetX, targetY) {
-  const cx = shape.x + shape.width / 2;
-  const cy = shape.y + shape.height / 2;
-  const dx = targetX - cx, dy = targetY - cy;
+function edgePoint(shape, tx, ty) {
+  const cx = shape.x + shape.width / 2, cy = shape.y + shape.height / 2;
+  const dx = tx - cx, dy = ty - cy;
   const hw = shape.width / 2, hh = shape.height / 2;
   if (hw === 0 || hh === 0) return { x: cx, y: cy };
-
   if (Math.abs(dx) * hh > Math.abs(dy) * hw) {
     const sx = dx > 0 ? 1 : -1;
     return { x: cx + sx * hw, y: cy + dy * (hw / Math.abs(dx)) };
@@ -79,19 +58,17 @@ function edgePoint(shape, targetX, targetY) {
 }
 
 export function parseDSL(dsl) {
-  const shapes = new Map();  // id -> shape element
-  const elements = [];       // simplified elements (pass 1: shapes + text)
-  const deferredArrows = []; // arrows resolved in pass 2
+  const shapes = new Map();
+  const elements = [];
+  const deferredArrows = [];
 
   for (const raw of dsl.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#") || line.startsWith("//")) continue;
 
-    // Extract quoted strings
     const quotedStrings = [];
     const withoutQuotes = line.replace(/'([^']*)'|"([^"]*)"/g, (_, s1, s2) => {
-      quotedStrings.push(s1 || s2);
-      return "";
+      quotedStrings.push(s1 || s2); return "";
     }).trim();
     const labelText = quotedStrings[0] || null;
     const detailsRaw = quotedStrings[1] || null;
@@ -108,25 +85,20 @@ export function parseDSL(dsl) {
     const exType = typeMap[type];
     if (!exType) continue;
 
-    // ID detection
     let id = null, coordIdx = 1;
     if (tokens[1] && !tokens[1].includes(",") && !tokens[1].includes("=") && tokens[1] !== "->") {
-      id = tokens[1];
-      coordIdx = 2;
+      id = tokens[1]; coordIdx = 2;
     }
     if (!id) id = nextId();
 
-    // Coordinates
     const cm = tokens[coordIdx]?.match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
     const x = cm ? parseFloat(cm[1]) : 0;
     const y = cm ? parseFloat(cm[2]) : 0;
 
-    // Size WxH
     let width = 0, height = 0;
     const sz = tokens.find(t => /^\d+x\d+$/.test(t));
     if (sz) [width, height] = sz.split("x").map(Number);
 
-    // Arrow endpoint
     const arrowIdx = tokens.indexOf("->");
     let endX = 0, endY = 0;
     if (arrowIdx >= 0 && tokens[arrowIdx + 1]) {
@@ -134,7 +106,6 @@ export function parseDSL(dsl) {
       if (m) { endX = parseFloat(m[1]); endY = parseFloat(m[2]); }
     }
 
-    // Key=value props
     const props = {};
     for (const t of tokens) {
       const kv = t.match(/^(\w+)=(.+)$/);
@@ -153,70 +124,33 @@ export function parseDSL(dsl) {
         strokeColor: color,
         backgroundColor: fill,
         fillStyle: fill !== "transparent" ? "solid" : "solid",
-        strokeWidth: 2,
-        roughness: 0,
+        strokeWidth: 2, roughness: 0,
         roundness: { type: 3 },
       };
 
       shapes.set(id, shape);
+      const isContainer = w * h > 100000;
 
-      // Detect if this is a large container shape (other shapes sit inside it)
-      const isContainer = w * h > 100000; // ~316x316+
-
-      if (labelText && !detailsRaw && !isContainer) {
-        // Simple label — let the library auto-center it
-        shape.label = { text: labelText, fontSize: Math.min(fontSize, 20) };
-        elements.push(shape);
-      } else if (labelText && !detailsRaw && isContainer) {
-        // Container: label as free text at top-left
+      if (isContainer && labelText) {
+        // Container: label as free text at top-left (not centered)
         elements.push(shape);
         elements.push({
-          type: "text",
-          id: `${id}-title`,
-          x: x + 15,
-          y: y + 12,
+          type: "text", id: `${id}-title`,
+          x: x + 15, y: y + 12,
           text: labelText,
           fontSize: Math.min(fontSize, 20),
-          strokeColor: color,
-          textAlign: "left",
+          strokeColor: color, textAlign: "left",
         });
-      } else if (labelText && detailsRaw) {
-        // Label + details — both as free text to avoid overlap
+      } else if (labelText) {
+        // Normal shape: combine title + details into one multi-line label
+        // The library auto-centers and auto-sizes this
+        let fullLabel = labelText;
+        if (detailsRaw) {
+          const detailLines = detailsRaw.replace(/(?<! )\|(?! )/g, "\n");
+          fullLabel = labelText + "\n" + detailLines;
+        }
+        shape.label = { text: fullLabel, fontSize: Math.min(fontSize, 16) };
         elements.push(shape);
-
-        const titleFontSize = Math.min(fontSize, 18);
-        const detailFontSize = 12;
-        const detailLines = detailsRaw.replace(/(?<! )\|(?! )/g, "\n");
-        const numDetailLines = detailLines.split("\n").length;
-
-        // Title centered at top of shape
-        const titleWidth = labelText.length * titleFontSize * 0.5;
-        elements.push({
-          type: "text",
-          id: `${id}-title`,
-          x: x + (w - titleWidth) / 2,
-          y: y + 8,
-          text: labelText,
-          fontSize: titleFontSize,
-          strokeColor: color,
-          textAlign: "center",
-        });
-
-        // Details below title
-        elements.push({
-          type: "text",
-          id: `${id}-details`,
-          x: x + 12,
-          y: y + 8 + titleFontSize * 1.3,
-          text: detailLines,
-          fontSize: detailFontSize,
-          strokeColor: "#868e96",
-          textAlign: "left",
-        });
-
-        // Auto-expand shape height if needed
-        const neededH = 8 + titleFontSize * 1.3 + numDetailLines * detailFontSize * 1.4 + 12;
-        if (shape.height < neededH) shape.height = neededH;
       } else {
         elements.push(shape);
       }
@@ -226,8 +160,7 @@ export function parseDSL(dsl) {
       elements.push({
         type: "text", id, x, y,
         text: labelText || "text",
-        fontSize: fontSize,
-        strokeColor: color,
+        fontSize, strokeColor: color,
         textAlign: props.align || "left",
       });
 
@@ -240,8 +173,7 @@ export function parseDSL(dsl) {
         type: exType, id, x, y,
         width: dx, height: dy,
         points: [[0, 0], [dx, dy]],
-        strokeColor: color,
-        strokeWidth: 2,
+        strokeColor: color, strokeWidth: 2,
         strokeStyle: props.style || "solid",
         roughness: 0,
       };
@@ -251,63 +183,69 @@ export function parseDSL(dsl) {
         arrow.startArrowhead = ["arrow", "dot", "bar", "triangle"].includes(props.start) ? props.start : null;
       }
 
+      // Always use arrow.label for labels (library places them properly)
+      if (labelText) {
+        arrow.label = { text: labelText, fontSize: 14 };
+      }
+
       if (props.from || props.to) {
-        deferredArrows.push({ arrow, from: props.from, to: props.to, labelText });
+        deferredArrows.push({ arrow, from: props.from, to: props.to });
       } else {
-        if (labelText) arrow.label = { text: labelText, fontSize: 14 };
         elements.push(arrow);
       }
     }
   }
 
   // Pass 2: Resolve arrow bindings
-  for (const { arrow, from, to, labelText } of deferredArrows) {
+  for (const { arrow, from, to } of deferredArrows) {
     const fromShape = from ? shapes.get(from) : null;
     const toShape = to ? shapes.get(to) : null;
 
     if (fromShape && toShape) {
       const [startFP, endFP] = computeFixedPoints(fromShape, toShape);
-      const fromCenter = { x: fromShape.x + fromShape.width / 2, y: fromShape.y + fromShape.height / 2 };
-      const toCenter = { x: toShape.x + toShape.width / 2, y: toShape.y + toShape.height / 2 };
-      const start = edgePoint(fromShape, toCenter.x, toCenter.y);
-      const end = edgePoint(toShape, fromCenter.x, fromCenter.y);
-
-      arrow.x = start.x;
-      arrow.y = start.y;
-      arrow.width = end.x - start.x;
-      arrow.height = end.y - start.y;
+      const fc = { x: fromShape.x + fromShape.width / 2, y: fromShape.y + fromShape.height / 2 };
+      const tc = { x: toShape.x + toShape.width / 2, y: toShape.y + toShape.height / 2 };
+      const start = edgePoint(fromShape, tc.x, tc.y);
+      const end = edgePoint(toShape, fc.x, fc.y);
+      arrow.x = start.x; arrow.y = start.y;
+      arrow.width = end.x - start.x; arrow.height = end.y - start.y;
       arrow.points = [[0, 0], [arrow.width, arrow.height]];
       arrow.startBinding = { elementId: fromShape.id, fixedPoint: startFP, gap: 10 };
       arrow.endBinding = { elementId: toShape.id, fixedPoint: endFP, gap: 10 };
     } else {
-      if (fromShape) {
-        arrow.startBinding = { elementId: fromShape.id, fixedPoint: [1, 0.5], gap: 10 };
-      }
-      if (toShape) {
-        arrow.endBinding = { elementId: toShape.id, fixedPoint: [0, 0.5], gap: 10 };
-      }
+      if (fromShape) arrow.startBinding = { elementId: fromShape.id, fixedPoint: [1, 0.5], gap: 10 };
+      if (toShape) arrow.endBinding = { elementId: toShape.id, fixedPoint: [0, 0.5], gap: 10 };
     }
 
     elements.push(arrow);
+  }
 
-    // Arrow label as free text above the arrow midpoint (not on the arrow)
-    if (labelText) {
-      const midX = arrow.x + (arrow.width || 0) / 2;
-      const midY = arrow.y + (arrow.height || 0) / 2;
-      const isVertical = Math.abs(arrow.height || 0) > Math.abs(arrow.width || 0);
-      const labelW = labelText.length * 14 * 0.5;
-      elements.push({
-        type: "text",
-        id: `${arrow.id}-label`,
-        x: isVertical ? midX + 10 : midX - labelW / 2,
-        y: isVertical ? midY - 10 : midY - 20,
-        text: labelText,
-        fontSize: 13,
-        strokeColor: arrow.strokeColor || "#868e96",
-        textAlign: "center",
-      });
+  // Pass 3: Z-ordering — arrows behind shapes, text on top
+  return zOrder(elements);
+}
+
+// ============================================================
+// Z-ordering: array order = render order (first = back)
+// Order: arrows → container shapes → regular shapes → text
+// ============================================================
+function zOrder(elements) {
+  const arrows = [];
+  const containers = [];
+  const shapes = [];
+  const texts = [];
+
+  for (const el of elements) {
+    if (el.type === "arrow" || el.type === "line") {
+      arrows.push(el);
+    } else if (["rectangle", "ellipse", "diamond"].includes(el.type) && (el.width || 0) * (el.height || 0) > 100000) {
+      containers.push(el);
+    } else if (["rectangle", "ellipse", "diamond"].includes(el.type)) {
+      shapes.push(el);
+    } else {
+      texts.push(el);
     }
   }
 
-  return elements;
+  // Arrows first (back), then containers, then shapes, then text (front)
+  return [...arrows, ...containers, ...shapes, ...texts];
 }

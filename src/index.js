@@ -26,12 +26,69 @@ async function convert(elements) {
 }
 
 // ============================================================
+// Z-ordering of converted elements
+// Excalidraw renders in array order: first = back, last = front
+// We want: arrows (back) → large containers → shapes → text (front)
+// ============================================================
+function zOrderConverted(elements) {
+  const arrows = [];
+  const containers = [];
+  const shapes = [];
+  const boundTexts = []; // text inside shapes (containerId set)
+  const freeTexts = [];  // standalone text
+
+  for (const el of elements) {
+    if (el.type === "arrow" || el.type === "line") {
+      arrows.push(el);
+    } else if (["rectangle", "ellipse", "diamond"].includes(el.type)) {
+      const area = (el.width || 0) * (el.height || 0);
+      if (area > 80000) {
+        containers.push(el);
+      } else {
+        shapes.push(el);
+      }
+    } else if (el.type === "text" && el.containerId) {
+      boundTexts.push(el);
+    } else {
+      freeTexts.push(el);
+    }
+  }
+
+  // Arrows at back, then containers, then shapes+their labels, then free text
+  // Bound texts go right after their parent shape for proper rendering
+  const ordered = [...arrows, ...containers];
+
+  // Interleave shapes with their bound texts
+  for (const shape of shapes) {
+    ordered.push(shape);
+    const labels = boundTexts.filter(t => t.containerId === shape.id);
+    ordered.push(...labels);
+  }
+
+  // Remaining bound texts (arrow labels etc)
+  const usedBoundTexts = new Set(ordered.filter(e => e.type === "text" && e.containerId).map(e => e.id));
+  for (const bt of boundTexts) {
+    if (!usedBoundTexts.has(bt.id)) ordered.push(bt);
+  }
+
+  // Free text on top
+  ordered.push(...freeTexts);
+
+  return ordered;
+}
+
+// ============================================================
 // Core: push elements live + persist
 // ============================================================
 async function pushElements(boardId, newElements, mode = "append") {
   await provider.joinRoom(boardId);
 
-  const convertedNew = newElements.length > 0 ? await convert(newElements) : newElements;
+  let convertedNew = newElements.length > 0 ? await convert(newElements) : newElements;
+
+  // Z-order AFTER conversion: arrows behind everything, shapes in middle, text on top
+  if (convertedNew.length > 0) {
+    convertedNew = zOrderConverted(convertedNew);
+  }
 
   const existing = await provider.getDrawing(boardId);
   if (!existing) throw new Error(`Board ${boardId} not found`);
