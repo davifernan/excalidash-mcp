@@ -15,14 +15,37 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod/v4";
 import { enrichElement, parseDSL, resolveColor, resolveFill, makeId, FONT_WIDTH, createShapeWithLabel, createBoundArrow } from "./elements.js";
 import { ExcaliDashProvider } from "./excalidash.js";
+import { convertElements, toSimplifiedFormat } from "./converter.js";
 
 const provider = new ExcaliDashProvider();
+
+// ============================================================
+// Convert elements via Excalidraw library (Playwright)
+// Falls back to raw elements if conversion fails
+// ============================================================
+async function convertViaExcalidraw(elements) {
+  try {
+    const simplified = toSimplifiedFormat(elements);
+    if (simplified.length === 0) return elements;
+    const converted = await convertElements(simplified);
+    return converted;
+  } catch (err) {
+    // Fallback: use our manually enriched elements
+    console.error("convertToExcalidrawElements failed, using fallback:", err.message);
+    return elements;
+  }
+}
 
 // ============================================================
 // Core: push elements + persist
 // ============================================================
 async function pushElements(boardId, newElements, mode = "append") {
   await provider.joinRoom(boardId);
+
+  // Convert elements via Excalidraw library for pixel-perfect results
+  const convertedNewElements = newElements.length > 0
+    ? await convertViaExcalidraw(newElements)
+    : newElements;
 
   const existing = await provider.getDrawing(boardId);
   if (!existing) throw new Error(`Board ${boardId} not found`);
@@ -32,7 +55,7 @@ async function pushElements(boardId, newElements, mode = "append") {
 
   let merged, socketElements;
 
-  if (mode === "replace" && newElements.length === 0) {
+  if (mode === "replace" && convertedNewElements.length === 0) {
     const deletedEls = existingEls.map(e => ({
       ...e, isDeleted: true, updated: now,
       version: (e.version || 1) + 1,
@@ -46,11 +69,11 @@ async function pushElements(boardId, newElements, mode = "append") {
       version: (e.version || 1) + 1,
       versionNonce: Math.floor(Math.random() * 2147483647),
     }));
-    merged = [...deletedEls, ...newElements];
+    merged = [...deletedEls, ...convertedNewElements];
     socketElements = merged;
   } else {
-    merged = [...existingEls, ...newElements];
-    socketElements = newElements;
+    merged = [...existingEls, ...convertedNewElements];
+    socketElements = convertedNewElements;
   }
 
   const elementOrder = merged.map(e => e.id);
