@@ -102,7 +102,7 @@ export function enrichElement(el) {
 }
 
 // ============================================================
-// Shape + label helper (creates properly bound shape + text)
+// Shape + label helper
 // ============================================================
 export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
   const shape = enrichElement(shapeProps);
@@ -110,12 +110,15 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
 
   const fontSize = labelProps.fontSize || 16;
   const fontFamily = labelProps.fontFamily || 1;
+  const mult = FONT_WIDTH[fontFamily] || 0.6;
+  const labelWidth = labelText.length * fontSize * mult;
+  const labelHeight = fontSize * 1.25;
   const labelId = `${shape.id}-label`;
 
   // Shape gets boundElements reference to label
   shape.boundElements = [...(shape.boundElements || []), { id: labelId, type: "text" }];
 
-  // Label is centered inside the shape via containerId
+  // Label centered inside shape via containerId
   const label = enrichElement({
     type: "text",
     id: labelId,
@@ -128,9 +131,11 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
     verticalAlign: "middle",
     strokeWidth: 1,
     roughness: 0,
-    // Position at shape center (browser will auto-adjust with containerId)
-    x: shape.x + shape.width / 2,
-    y: shape.y + shape.height / 2,
+    // Approximate center position (browser refines with containerId)
+    x: shape.x + (shape.width - labelWidth) / 2,
+    y: shape.y + (shape.height - labelHeight) / 2,
+    width: labelWidth,
+    height: labelHeight,
     originalText: labelText,
     autoResize: true,
   });
@@ -141,36 +146,77 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
 // ============================================================
 // Arrow with bindings helper
 // ============================================================
-export function createBoundArrow(arrowProps, fromShapeId, toShapeId, allElements) {
-  const arrow = enrichElement({ type: "arrow", ...arrowProps });
+function shapeCenter(el) {
+  return { x: el.x + (el.width || 0) / 2, y: el.y + (el.height || 0) / 2 };
+}
 
-  // Bind to source shape
-  if (fromShapeId) {
-    const fromShape = allElements.find(e => e.id === fromShapeId || e._dslId === fromShapeId);
-    if (fromShape) {
-      arrow.startBinding = {
-        elementId: fromShape.id,
-        focus: 0,
-        gap: 8,
-        fixedPoint: null,
-      };
-      // Add arrow to shape's boundElements
-      fromShape.boundElements = [...(fromShape.boundElements || []), { id: arrow.id, type: "arrow" }];
+function shapeEdgePoint(shape, targetX, targetY) {
+  // Find the point on the shape edge closest to the target direction
+  const cx = shape.x + (shape.width || 0) / 2;
+  const cy = shape.y + (shape.height || 0) / 2;
+  const dx = targetX - cx;
+  const dy = targetY - cy;
+  const hw = (shape.width || 0) / 2;
+  const hh = (shape.height || 0) / 2;
+
+  if (hw === 0 || hh === 0) return { x: cx, y: cy };
+
+  // Determine which edge to use based on direction
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+
+  if (absDx * hh > absDy * hw) {
+    // Hit left or right edge
+    const signX = dx > 0 ? 1 : -1;
+    return { x: cx + signX * hw, y: cy + dy * (hw / absDx) };
+  } else {
+    // Hit top or bottom edge
+    const signY = dy > 0 ? 1 : -1;
+    return { x: cx + dx * (hh / absDy), y: cy + signY * hh };
+  }
+}
+
+export function createBoundArrow(arrowProps, fromShapeId, toShapeId, allElements) {
+  const fromShape = fromShapeId ? allElements.find(e => e.id === fromShapeId || e._dslId === fromShapeId) : null;
+  const toShape = toShapeId ? allElements.find(e => e.id === toShapeId || e._dslId === toShapeId) : null;
+
+  // Auto-calculate arrow coordinates from shape edges
+  if (fromShape && toShape) {
+    const fromCenter = shapeCenter(fromShape);
+    const toCenter = shapeCenter(toShape);
+    const startPt = shapeEdgePoint(fromShape, toCenter.x, toCenter.y);
+    const endPt = shapeEdgePoint(toShape, fromCenter.x, fromCenter.y);
+    const gap = 8;
+
+    // Adjust for gap
+    const dx = endPt.x - startPt.x;
+    const dy = endPt.y - startPt.y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > gap * 2) {
+      const nx = dx / len, ny = dy / len;
+      startPt.x += nx * gap;
+      startPt.y += ny * gap;
+      endPt.x -= nx * gap;
+      endPt.y -= ny * gap;
     }
+
+    arrowProps.x = startPt.x;
+    arrowProps.y = startPt.y;
+    arrowProps.width = endPt.x - startPt.x;
+    arrowProps.height = endPt.y - startPt.y;
+    arrowProps.points = [[0, 0], [arrowProps.width, arrowProps.height]];
   }
 
-  // Bind to target shape
-  if (toShapeId) {
-    const toShape = allElements.find(e => e.id === toShapeId || e._dslId === toShapeId);
-    if (toShape) {
-      arrow.endBinding = {
-        elementId: toShape.id,
-        focus: 0,
-        gap: 8,
-        fixedPoint: null,
-      };
-      toShape.boundElements = [...(toShape.boundElements || []), { id: arrow.id, type: "arrow" }];
-    }
+  const arrow = enrichElement({ type: "arrow", ...arrowProps });
+
+  if (fromShape) {
+    arrow.startBinding = { elementId: fromShape.id, focus: 0, gap: 8, fixedPoint: null };
+    fromShape.boundElements = [...(fromShape.boundElements || []), { id: arrow.id, type: "arrow" }];
+  }
+
+  if (toShape) {
+    arrow.endBinding = { elementId: toShape.id, focus: 0, gap: 8, fixedPoint: null };
+    toShape.boundElements = [...(toShape.boundElements || []), { id: arrow.id, type: "arrow" }];
   }
 
   return arrow;
@@ -278,22 +324,24 @@ export function parseDSL(dsl) {
       }
 
       // Bindings
+      let arrow;
       if (props.from || props.to) {
-        const arrow = createBoundArrow(arrowEl, props.from, props.to, elements);
-        if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
-        elements.push(arrow);
+        arrow = createBoundArrow(arrowEl, props.from, props.to, elements);
       } else {
-        const arrow = enrichElement(arrowEl);
-        if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
-        elements.push(arrow);
+        arrow = enrichElement(arrowEl);
       }
+      if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
+      elements.push(arrow);
 
-      // Arrow label
+      // Arrow label (positioned at arrow midpoint)
       if (text) {
+        const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 14;
+        const labelWidth = text.length * labelFontSize * 0.6;
         elements.push(enrichElement({
           type: "text",
-          x: x + dx / 2 - 20, y: y + dy / 2 - 15,
-          text, fontSize: 14, fontFamily: 1,
+          x: arrow.x + (arrow.width || 0) / 2 - labelWidth / 2,
+          y: arrow.y + (arrow.height || 0) / 2 - labelFontSize,
+          text, fontSize: labelFontSize, fontFamily: 1,
           strokeColor: resolveColor(props.color || "gray"),
           strokeWidth: 1, roughness: 0,
         }));
