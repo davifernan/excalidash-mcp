@@ -31,8 +31,6 @@ async function convert(elements) {
 // We want: arrows (back) → large containers → shapes → text (front)
 // ============================================================
 function zOrderConverted(elements) {
-  const arrowIds = new Set();
-  const shapeIds = new Set();
   const arrows = [];
   const containers = [];
   const shapes = [];
@@ -42,11 +40,9 @@ function zOrderConverted(elements) {
   for (const el of elements) {
     if (el.type === "arrow" || el.type === "line") {
       arrows.push(el);
-      arrowIds.add(el.id);
     } else if (["rectangle", "ellipse", "diamond"].includes(el.type)) {
       const area = (el.width || 0) * (el.height || 0);
       if (area > 80000) { containers.push(el); } else { shapes.push(el); }
-      shapeIds.add(el.id);
     } else if (el.type === "text" && el.containerId) {
       boundTexts.push(el);
     } else {
@@ -54,33 +50,55 @@ function zOrderConverted(elements) {
     }
   }
 
+  // Classify arrows: "between layers" vs "inside container"
+  // An arrow is "inside" a container if both its start and end shapes are inside that container
+  const containerBounds = containers.map(c => ({
+    id: c.id, x: c.x, y: c.y, r: c.x + (c.width||0), b: c.y + (c.height||0)
+  }));
+
+  function isInsideContainer(arrow) {
+    // Check if both endpoints are within a container
+    const sx = arrow.x, sy = arrow.y;
+    const ex = arrow.x + (arrow.width||0), ey = arrow.y + (arrow.height||0);
+    return containerBounds.some(c =>
+      sx >= c.x && sx <= c.r && sy >= c.y && sy <= c.b &&
+      ex >= c.x && ex <= c.r && ey >= c.y && ey <= c.b
+    );
+  }
+
+  const outerArrows = arrows.filter(a => !isInsideContainer(a));
+  const innerArrows = arrows.filter(a => isInsideContainer(a));
+
   const ordered = [];
 
-  // 1. Arrows + their labels (back layer)
-  for (const arrow of arrows) {
+  // 1. Outer arrows + labels (very back — between layers)
+  for (const arrow of outerArrows) {
     ordered.push(arrow);
-    // Arrow labels (bound text with containerId = arrow id) go right after
-    const arrowLabels = boundTexts.filter(t => t.containerId === arrow.id);
-    ordered.push(...arrowLabels);
+    ordered.push(...boundTexts.filter(t => t.containerId === arrow.id));
   }
 
   // 2. Containers
   ordered.push(...containers);
 
-  // 3. Shapes + their labels
-  for (const shape of shapes) {
-    ordered.push(shape);
-    const shapeLabels = boundTexts.filter(t => t.containerId === shape.id);
-    ordered.push(...shapeLabels);
+  // 3. Inner arrows + labels (inside containers, behind inner shapes)
+  for (const arrow of innerArrows) {
+    ordered.push(arrow);
+    ordered.push(...boundTexts.filter(t => t.containerId === arrow.id));
   }
 
-  // 4. Remaining bound texts not yet placed
+  // 4. Shapes + their labels
+  for (const shape of shapes) {
+    ordered.push(shape);
+    ordered.push(...boundTexts.filter(t => t.containerId === shape.id));
+  }
+
+  // 5. Remaining bound texts
   const placed = new Set(ordered.map(e => e.id));
   for (const bt of boundTexts) {
     if (!placed.has(bt.id)) ordered.push(bt);
   }
 
-  // 5. Free text on top
+  // 6. Free text on top
   ordered.push(...freeTexts);
 
   return ordered;
