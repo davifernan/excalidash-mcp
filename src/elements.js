@@ -483,5 +483,102 @@ export function parseDSL(dsl) {
     }
   }
 
+  // Pass 3: Auto-spacing post-processor
+  return autoSpacing(elements);
+}
+
+// ============================================================
+// Auto-spacing post-processor
+// Fixes overlaps and ensures text fits inside shapes.
+// ============================================================
+const MIN_LABEL_SHAPE_GAP = 8;
+const SHAPE_PADDING = 10;
+
+function getBBox(el) {
+  const w = el.width || 0, h = el.height || 0;
+  return { x: el.x, y: el.y, w, h, r: el.x + w, b: el.y + h };
+}
+
+function bboxOverlap(a, b) {
+  return a.x < b.r && a.r > b.x && a.y < b.b && a.b > b.y;
+}
+
+function autoSpacing(elements) {
+  const shapes = elements.filter(e => ["rectangle", "ellipse", "diamond"].includes(e.type) && !e.isDeleted);
+  const texts = elements.filter(e => e.type === "text" && !e.isDeleted);
+
+  // 1. Ensure detail/label text fits inside its parent shape
+  for (const txt of texts) {
+    if (txt.id?.endsWith("-details") || txt.id?.endsWith("-label")) {
+      const parentId = txt.id.replace(/-details$/, "").replace(/-label$/, "");
+      const parent = shapes.find(s => s.id === parentId);
+      if (!parent) continue;
+
+      const tBox = getBBox(txt);
+      const pBox = getBBox(parent);
+
+      // Text extends beyond shape right edge → widen shape
+      if (tBox.r > pBox.r - SHAPE_PADDING) {
+        parent.width = (tBox.r - parent.x) + SHAPE_PADDING * 2;
+      }
+      // Text extends beyond shape bottom → heighten shape
+      if (tBox.b > pBox.b - SHAPE_PADDING) {
+        parent.height = (tBox.b - parent.y) + SHAPE_PADDING;
+      }
+    }
+  }
+
+  // 2. Arrow labels: push away from overlapping shapes
+  const arrowLabels = texts.filter(t =>
+    !t.containerId &&
+    !t.id?.endsWith("-details") &&
+    !t.id?.endsWith("-label") &&
+    t.fontSize && t.fontSize <= 14  // only small labels (arrow labels)
+  );
+  for (const label of arrowLabels) {
+    const lBox = getBBox(label);
+    for (const shape of shapes) {
+      const sBox = getBBox(shape);
+      if (bboxOverlap(lBox, sBox)) {
+        // Move label above or below the shape, whichever is closer
+        const distToTop = Math.abs(lBox.b - sBox.y);
+        const distToBottom = Math.abs(sBox.b - lBox.y);
+        if (distToTop < distToBottom) {
+          label.y = sBox.y - lBox.h - MIN_LABEL_SHAPE_GAP;
+        } else {
+          label.y = sBox.b + MIN_LABEL_SHAPE_GAP;
+        }
+      }
+    }
+  }
+
+  // 3. Recalculate arrow positions after shape resizing
+  // (bound arrows may need updating if their source/target shapes changed size)
+  for (const el of elements) {
+    if (el.type === "arrow" && el.startBinding && el.endBinding) {
+      const from = shapes.find(s => s.id === el.startBinding.elementId);
+      const to = shapes.find(s => s.id === el.endBinding.elementId);
+      if (from && to) {
+        const fromCenter = { x: from.x + (from.width || 0) / 2, y: from.y + (from.height || 0) / 2 };
+        const toCenter = { x: to.x + (to.width || 0) / 2, y: to.y + (to.height || 0) / 2 };
+        const startPt = shapeEdgePoint(from, toCenter.x, toCenter.y);
+        const endPt = shapeEdgePoint(to, fromCenter.x, fromCenter.y);
+        const gap = 8;
+        const dx = endPt.x - startPt.x, dy = endPt.y - startPt.y;
+        const len = Math.sqrt(dx * dx + dy * dy);
+        if (len > gap * 2) {
+          const nx = dx / len, ny = dy / len;
+          startPt.x += nx * gap; startPt.y += ny * gap;
+          endPt.x -= nx * gap; endPt.y -= ny * gap;
+        }
+        el.x = startPt.x;
+        el.y = startPt.y;
+        el.width = endPt.x - startPt.x;
+        el.height = endPt.y - startPt.y;
+        el.points = [[0, 0], [el.width, el.height]];
+      }
+    }
+  }
+
   return elements;
 }
