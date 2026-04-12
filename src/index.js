@@ -443,12 +443,23 @@ server.registerTool("export_png", {
     const browser = await getBrowser();
     const page = await browser.newPage({ viewport: { width: width || 1920, height: height || 1080 } });
 
+    // Login to ExcaliDash if targeting a board (not a generic URL)
+    if (board_id && !url) {
+      const loginUrl = provider.publicUrl + "/login";
+      await page.goto(loginUrl, { waitUntil: "networkidle", timeout: 15000 });
+      // Fill login form
+      await page.fill('input[type="email"], input[name="email"]', provider.email).catch(() => {});
+      await page.fill('input[type="password"], input[name="password"]', provider.password).catch(() => {});
+      await page.click('button[type="submit"]').catch(() => {});
+      await page.waitForTimeout(2000);
+    }
+
     await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 15000 });
-    await page.waitForTimeout(wait || 2000);
+    await page.waitForTimeout(wait || 3000);
 
     // Hide ExcaliDash UI elements for a clean screenshot
     await page.evaluate(() => {
-      for (const sel of [".main-menu-trigger", "[class*='header']", "[class*='toolbar']", "[class*='sidebar']"]) {
+      for (const sel of [".main-menu-trigger", "[class*='header']", "[class*='toolbar']", "[class*='sidebar']", "[class*='Island']", ".layer-ui__wrapper"]) {
         document.querySelectorAll(sel).forEach(el => el.style.display = "none");
       }
     }).catch(() => {});

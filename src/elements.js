@@ -112,9 +112,6 @@ export function enrichElement(el) {
 //   └──────────────────────┘
 // ============================================================
 export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
-  const shape = enrichElement(shapeProps);
-  if (!labelText) return [shape];
-
   const titleFontSize = labelProps.fontSize || 16;
   const fontFamily = labelProps.fontFamily || 1;
   const mult = FONT_WIDTH[fontFamily] || 0.6;
@@ -122,13 +119,44 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
   const padding = 12;
   const titleLineHeight = titleFontSize * 1.25;
 
+  // Auto-size shape height based on content
+  let requiredHeight = padding * 2 + titleLineHeight;
+  let detailFontSize = 12;
+  let detailLines = [];
+
+  if (detailText) {
+    detailFontSize = Math.max(11, titleFontSize - 4);
+    detailLines = detailText.split("\\n");
+    const detailHeight = detailLines.length * detailFontSize * 1.4;
+    requiredHeight = padding + titleLineHeight + 6 + detailHeight + padding;
+  }
+
+  // Expand shape if content doesn't fit
+  if (shapeProps.height && shapeProps.height < requiredHeight) {
+    shapeProps.height = requiredHeight;
+  } else if (!shapeProps.height) {
+    shapeProps.height = requiredHeight;
+  }
+
+  // Also ensure width fits the detail text
+  if (detailLines.length > 0) {
+    const maxDetailLen = Math.max(...detailLines.map(l => l.length));
+    const detailTextWidth = maxDetailLen * detailFontSize * mult + padding * 2;
+    if (shapeProps.width && shapeProps.width < detailTextWidth) {
+      shapeProps.width = detailTextWidth;
+    }
+  }
+
+  const shape = enrichElement(shapeProps);
+  if (!labelText) return [shape];
+
   const elements = [shape];
 
   // Title text — centered horizontally, near top of shape
   const titleWidth = labelText.length * titleFontSize * mult;
   const titleY = detailText
-    ? shape.y + padding  // top if details follow
-    : shape.y + (shape.height - titleLineHeight) / 2;  // centered if no details
+    ? shape.y + padding
+    : shape.y + (shape.height - titleLineHeight) / 2;
   const titleX = shape.x + (shape.width - titleWidth) / 2;
 
   elements.push(enrichElement({
@@ -151,10 +179,8 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
   }));
 
   // Detail text — smaller, left-aligned, below title
-  if (detailText) {
-    const detailFontSize = Math.max(12, titleFontSize - 4);
-    const detailLines = detailText.split("\\n");
-    const detailHeight = detailLines.length * detailFontSize * 1.25;
+  if (detailText && detailLines.length > 0) {
+    const detailHeight = detailLines.length * detailFontSize * 1.4;
     const maxLineLen = Math.max(...detailLines.map(l => l.length));
     const detailWidth = maxLineLen * detailFontSize * mult;
 
@@ -170,7 +196,7 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
       strokeWidth: 1,
       roughness: 0,
       x: shape.x + padding,
-      y: titleY + titleLineHeight + 4,
+      y: titleY + titleLineHeight + 6,
       width: detailWidth,
       height: detailHeight,
       originalText: detailLines.join("\n"),
@@ -379,15 +405,20 @@ export function parseDSL(dsl) {
       if (dslId) idMap.set(dslId, arrow);
       elements.push(arrow);
 
-      // Arrow label (positioned at arrow midpoint)
+      // Arrow label (positioned at arrow midpoint, offset to not overlap)
       if (text) {
-        const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 14;
-        const labelWidth = text.length * labelFontSize * 0.6;
+        const labelFontSize = props.labelsize ? parseInt(props.labelsize) : 13;
+        const labelWidth = text.length * labelFontSize * 0.55;
+        const aw = arrow.width || 0, ah = arrow.height || 0;
+        const isVertical = Math.abs(ah) > Math.abs(aw);
+        // Offset label to the side of the arrow
+        const offsetX = isVertical ? 10 : -labelWidth / 2;
+        const offsetY = isVertical ? -labelFontSize / 2 : -labelFontSize - 4;
         elements.push(enrichElement({
           type: "text",
-          x: arrow.x + (arrow.width || 0) / 2 - labelWidth / 2,
-          y: arrow.y + (arrow.height || 0) / 2 - labelFontSize,
-          text, fontSize: labelFontSize, fontFamily: 1,
+          x: arrow.x + aw / 2 + offsetX,
+          y: arrow.y + ah / 2 + offsetY,
+          text, fontSize: labelFontSize, fontFamily: 3,
           strokeColor: resolveColor(props.color || "gray"),
           strokeWidth: 1, roughness: 0,
         }));
