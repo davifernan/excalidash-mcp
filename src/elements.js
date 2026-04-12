@@ -251,20 +251,17 @@ export function parseDSL(dsl) {
         arrow.startArrowhead = ["arrow", "dot", "bar", "triangle"].includes(props.start) ? props.start : null;
       }
 
-      if (labelText) {
-        arrow.label = { text: labelText, fontSize: 14 };
-      }
-
       if (props.from || props.to) {
-        deferredArrows.push({ arrow, from: props.from, to: props.to });
+        deferredArrows.push({ arrow, from: props.from, to: props.to, labelText });
       } else {
+        if (labelText) arrow.label = { text: labelText, fontSize: 14 };
         elements.push(arrow);
       }
     }
   }
 
   // Pass 2: Resolve arrow bindings
-  for (const { arrow, from, to } of deferredArrows) {
+  for (const { arrow, from, to, labelText } of deferredArrows) {
     const fromShape = from ? shapes.get(from) : null;
     const toShape = to ? shapes.get(to) : null;
 
@@ -292,6 +289,24 @@ export function parseDSL(dsl) {
     }
 
     elements.push(arrow);
+
+    // Arrow label as free text above the arrow midpoint (not on the arrow)
+    if (labelText) {
+      const midX = arrow.x + (arrow.width || 0) / 2;
+      const midY = arrow.y + (arrow.height || 0) / 2;
+      const isVertical = Math.abs(arrow.height || 0) > Math.abs(arrow.width || 0);
+      const labelW = labelText.length * 14 * 0.5;
+      elements.push({
+        type: "text",
+        id: `${arrow.id}-label`,
+        x: isVertical ? midX + 10 : midX - labelW / 2,
+        y: isVertical ? midY - 10 : midY - 20,
+        text: labelText,
+        fontSize: 13,
+        strokeColor: arrow.strokeColor || "#868e96",
+        textAlign: "center",
+      });
+    }
   }
 
   return elements;
