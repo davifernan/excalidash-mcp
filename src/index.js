@@ -31,22 +31,22 @@ async function convert(elements) {
 // We want: arrows (back) → large containers → shapes → text (front)
 // ============================================================
 function zOrderConverted(elements) {
+  const arrowIds = new Set();
+  const shapeIds = new Set();
   const arrows = [];
   const containers = [];
   const shapes = [];
-  const boundTexts = []; // text inside shapes (containerId set)
-  const freeTexts = [];  // standalone text
+  const boundTexts = [];
+  const freeTexts = [];
 
   for (const el of elements) {
     if (el.type === "arrow" || el.type === "line") {
       arrows.push(el);
+      arrowIds.add(el.id);
     } else if (["rectangle", "ellipse", "diamond"].includes(el.type)) {
       const area = (el.width || 0) * (el.height || 0);
-      if (area > 80000) {
-        containers.push(el);
-      } else {
-        shapes.push(el);
-      }
+      if (area > 80000) { containers.push(el); } else { shapes.push(el); }
+      shapeIds.add(el.id);
     } else if (el.type === "text" && el.containerId) {
       boundTexts.push(el);
     } else {
@@ -54,24 +54,33 @@ function zOrderConverted(elements) {
     }
   }
 
-  // Arrows at back, then containers, then shapes+their labels, then free text
-  // Bound texts go right after their parent shape for proper rendering
-  const ordered = [...arrows, ...containers];
+  const ordered = [];
 
-  // Interleave shapes with their bound texts
+  // 1. Arrows + their labels (back layer)
+  for (const arrow of arrows) {
+    ordered.push(arrow);
+    // Arrow labels (bound text with containerId = arrow id) go right after
+    const arrowLabels = boundTexts.filter(t => t.containerId === arrow.id);
+    ordered.push(...arrowLabels);
+  }
+
+  // 2. Containers
+  ordered.push(...containers);
+
+  // 3. Shapes + their labels
   for (const shape of shapes) {
     ordered.push(shape);
-    const labels = boundTexts.filter(t => t.containerId === shape.id);
-    ordered.push(...labels);
+    const shapeLabels = boundTexts.filter(t => t.containerId === shape.id);
+    ordered.push(...shapeLabels);
   }
 
-  // Remaining bound texts (arrow labels etc)
-  const usedBoundTexts = new Set(ordered.filter(e => e.type === "text" && e.containerId).map(e => e.id));
+  // 4. Remaining bound texts not yet placed
+  const placed = new Set(ordered.map(e => e.id));
   for (const bt of boundTexts) {
-    if (!usedBoundTexts.has(bt.id)) ordered.push(bt);
+    if (!placed.has(bt.id)) ordered.push(bt);
   }
 
-  // Free text on top
+  // 5. Free text on top
   ordered.push(...freeTexts);
 
   return ordered;
@@ -111,7 +120,9 @@ async function pushElements(boardId, newElements, mode = "append") {
       version: (e.version || 1) + 1,
       versionNonce: Math.floor(Math.random() * 2147483647),
     }));
-    merged = [...deleted, ...convertedNew];
+    // Z-ordered active elements FIRST, deleted at end
+    // Array position = z-order in Excalidraw
+    merged = [...convertedNew, ...deleted];
     socketElements = merged;
   } else {
     merged = [...existingEls, ...convertedNew];
