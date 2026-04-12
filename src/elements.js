@@ -102,45 +102,83 @@ export function enrichElement(el) {
 }
 
 // ============================================================
-// Shape + label helper
+// Shape + label + details helper
+//
+// Layout inside shape:
+//   ┌──────────────────┐
+//   │  Title (bold/big) │  ← label, centered horizontally, near top
+//   │  detail line 1    │  ← details, smaller, left-aligned below title
+//   │  detail line 2    │
+//   └──────────────────────┘
 // ============================================================
 export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
   const shape = enrichElement(shapeProps);
   if (!labelText) return [shape];
 
-  const fontSize = labelProps.fontSize || 16;
+  const titleFontSize = labelProps.fontSize || 16;
   const fontFamily = labelProps.fontFamily || 1;
   const mult = FONT_WIDTH[fontFamily] || 0.6;
-  const labelWidth = labelText.length * fontSize * mult;
-  const labelHeight = fontSize * 1.25;
-  const labelId = `${shape.id}-label`;
+  const detailText = labelProps.details || null;
+  const padding = 12;
+  const titleLineHeight = titleFontSize * 1.25;
 
-  // Shape gets boundElements reference to label
-  shape.boundElements = [...(shape.boundElements || []), { id: labelId, type: "text" }];
+  const elements = [shape];
 
-  // Label centered inside shape via containerId
-  const label = enrichElement({
+  // Title text — centered horizontally, near top of shape
+  const titleWidth = labelText.length * titleFontSize * mult;
+  const titleY = detailText
+    ? shape.y + padding  // top if details follow
+    : shape.y + (shape.height - titleLineHeight) / 2;  // centered if no details
+  const titleX = shape.x + (shape.width - titleWidth) / 2;
+
+  elements.push(enrichElement({
     type: "text",
-    id: labelId,
+    id: `${shape.id}-label`,
     text: labelText,
-    fontSize,
+    fontSize: titleFontSize,
     fontFamily,
     strokeColor: labelProps.strokeColor || shape.strokeColor,
-    containerId: shape.id,
     textAlign: "center",
-    verticalAlign: "middle",
+    verticalAlign: "top",
     strokeWidth: 1,
     roughness: 0,
-    // Approximate center position (browser refines with containerId)
-    x: shape.x + (shape.width - labelWidth) / 2,
-    y: shape.y + (shape.height - labelHeight) / 2,
-    width: labelWidth,
-    height: labelHeight,
+    x: titleX,
+    y: titleY,
+    width: titleWidth,
+    height: titleLineHeight,
     originalText: labelText,
     autoResize: true,
-  });
+  }));
 
-  return [shape, label];
+  // Detail text — smaller, left-aligned, below title
+  if (detailText) {
+    const detailFontSize = Math.max(12, titleFontSize - 4);
+    const detailLines = detailText.split("\\n");
+    const detailHeight = detailLines.length * detailFontSize * 1.25;
+    const maxLineLen = Math.max(...detailLines.map(l => l.length));
+    const detailWidth = maxLineLen * detailFontSize * mult;
+
+    elements.push(enrichElement({
+      type: "text",
+      id: `${shape.id}-details`,
+      text: detailLines.join("\n"),
+      fontSize: detailFontSize,
+      fontFamily,
+      strokeColor: resolveColor("gray"),
+      textAlign: "left",
+      verticalAlign: "top",
+      strokeWidth: 1,
+      roughness: 0,
+      x: shape.x + padding,
+      y: titleY + titleLineHeight + 4,
+      width: detailWidth,
+      height: detailHeight,
+      originalText: detailLines.join("\n"),
+      autoResize: true,
+    }));
+  }
+
+  return elements;
 }
 
 // ============================================================
@@ -242,11 +280,15 @@ export function parseDSL(dsl) {
     const line = raw.trim();
     if (!line || line.startsWith("#") || line.startsWith("//")) continue;
 
-    // Extract quoted text
-    const textMatch = line.match(/'([^']+)'|"([^"]+)"/);
-    const text = textMatch ? (textMatch[1] || textMatch[2]) : null;
-    const withoutText = line.replace(/'[^']*'|"[^"]*"/, "").trim();
-    const tokens = withoutText.split(/\s+/);
+    // Extract ALL quoted strings (first = label, second = details if present)
+    const quotedStrings = [];
+    const withoutQuotes = line.replace(/'([^']*)'|"([^"]*)"/g, (_, s1, s2) => {
+      quotedStrings.push(s1 || s2);
+      return "";
+    }).trim();
+    const text = quotedStrings[0] || null;
+    const quotedDetails = quotedStrings[1] || null;
+    const tokens = withoutQuotes.split(/\s+/).filter(Boolean);
 
     const type = tokens[0]?.toLowerCase();
     if (!type) continue;
@@ -356,9 +398,19 @@ export function parseDSL(dsl) {
       };
 
       if (text) {
-        const [shape, label] = createShapeWithLabel(shapeProps, text, { strokeColor: color, fontSize: Math.min(fontSize, 18) });
-        if (dslId) { shape._dslId = dslId; idMap.set(dslId, shape); }
-        elements.push(shape, label);
+        // Details: from props (pipe-separated) or second quoted string
+        const detailStr = props.details
+          ? props.details.replace(/\|/g, "\\n")
+          : quotedDetails
+            ? quotedDetails.replace(/\|/g, "\\n")
+            : null;
+        const shapeEls = createShapeWithLabel(shapeProps, text, {
+          strokeColor: color,
+          fontSize: Math.min(fontSize, 18),
+          details: detailStr,
+        });
+        if (dslId) { shapeEls[0]._dslId = dslId; idMap.set(dslId, shapeEls[0]); }
+        elements.push(...shapeEls);
       } else {
         const shape = enrichElement(shapeProps);
         if (dslId) { shape._dslId = dslId; idMap.set(dslId, shape); }

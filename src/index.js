@@ -159,14 +159,15 @@ server.registerTool("add_shape", {
     height: z.number().optional().describe("Height (default 80)"),
     color: z.string().optional().describe("Stroke color"),
     fill: z.string().optional().describe("Fill color"),
-    label: z.string().optional().describe("Text label inside the shape"),
+    label: z.string().optional().describe("Title/label inside the shape"),
+    details: z.string().optional().describe("Detail text below the label (use \\n for line breaks)"),
   }),
-}, async ({ board_id, shape, x, y, width, height, color, fill, label }) => {
+}, async ({ board_id, shape, x, y, width, height, color, fill, label, details }) => {
   try {
     const w = width || 160, h = height || 80;
     const els = createShapeWithLabel(
       { type: shape, x, y, width: w, height: h, strokeColor: resolveColor(color || "black"), backgroundColor: fill ? resolveFill(fill) : "transparent" },
-      label, { strokeColor: resolveColor(color || "black") }
+      label, { strokeColor: resolveColor(color || "black"), details }
     );
     const r = await pushElements(board_id, els);
     return { content: [{ type: "text", text: `Added ${shape}${label ? ` "${label}"` : ""} (${r.total} total)` }] };
@@ -367,14 +368,19 @@ server.registerTool("add_from_library", {
 server.registerTool("draw_scene", {
   description: `Draw multiple elements with compact DSL. Each line = one element.
 
-Syntax: TYPE x,y [WxH] [color=NAME] [fill=NAME] [size=N] [font=N] ['text']
-Types: rect, circle, diamond, arrow, line, text
+Syntax: TYPE [ID] x,y [WxH] [key=val...] ['label']
+Types: rect, box, circle, oval, diamond, arrow, line, text
 Colors: red, blue, green, orange, purple, yellow, gray, black (or #hex)
-Arrows: arrow x,y -> x2,y2 [color=C] [style=dashed] [start=arrow] [end=triangle] ['label']
+
+Shapes with details: rect ID x,y WxH color=C fill=F details='line1\\nline2' 'Title'
+Bound arrows: arrow 0,0 -> 0,0 from=ID to=ID color=C ['label']
+  (coords auto-calculated when from/to specified — use 0,0 -> 0,0)
+Arrow styles: style=dashed start=arrow end=triangle
 
 Example:
-  rect 100,100 200x100 color=blue fill=blue 'Frontend'
-  arrow 300,150 -> 400,150 color=gray 'API'
+  rect fe 100,100 200x80 color=blue fill=blue 'Frontend'
+  rect be 400,100 200x120 color=green fill=green details='Express\\nPostgres' 'Backend'
+  arrow 0,0 -> 0,0 from=fe to=be color=gray 'REST API'
   text 250,20 size=28 color=black 'Architecture'`,
   inputSchema: z.object({
     board_id: z.string(),
