@@ -138,11 +138,11 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
     shapeProps.height = requiredHeight;
   }
 
-  // Also ensure width fits the detail text
+  // Also ensure width fits the detail text (generous — 0.7x for safety)
   if (detailLines.length > 0) {
     const maxDetailLen = Math.max(...detailLines.map(l => l.length));
-    const detailTextWidth = maxDetailLen * detailFontSize * mult + padding * 2;
-    if (shapeProps.width && shapeProps.width < detailTextWidth) {
+    const detailTextWidth = maxDetailLen * detailFontSize * 0.7 + padding * 2;
+    if (!shapeProps.width || shapeProps.width < detailTextWidth) {
       shapeProps.width = detailTextWidth;
     }
   }
@@ -182,7 +182,7 @@ export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
   if (detailText && detailLines.length > 0) {
     const detailHeight = detailLines.length * detailFontSize * 1.4;
     const maxLineLen = Math.max(...detailLines.map(l => l.length));
-    const detailWidth = maxLineLen * detailFontSize * mult;
+    const detailWidth = maxLineLen * detailFontSize * 0.7; // generous width
 
     elements.push(enrichElement({
       type: "text",
@@ -437,12 +437,13 @@ export function parseDSL(dsl) {
       if (dslId) shapeProps.id = dslId;
 
       if (text) {
-        // Details: from props (pipe-separated) or second quoted string
-        const detailStr = props.details
-          ? props.details.replace(/\|/g, "\\n")
-          : quotedDetails
-            ? quotedDetails.replace(/\|/g, "\\n")
-            : null;
+        // Details: from second quoted string or props
+        // Pipe WITHOUT surrounding spaces = line break: "line1|line2"
+        // Pipe WITH spaces = literal separator: "A | B | C" stays one line
+        const rawDetails = props.details || quotedDetails || null;
+        const detailStr = rawDetails
+          ? rawDetails.replace(/(?<! )\|(?! )/g, "\\n")
+          : null;
         const shapeEls = createShapeWithLabel(shapeProps, text, {
           strokeColor: color,
           fontSize: Math.min(fontSize, 18),
