@@ -13,7 +13,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
-import { enrichElement, parseDSL, resolveColor, resolveFill, makeId, FONT_WIDTH } from "./elements.js";
+import { enrichElement, parseDSL, resolveColor, resolveFill, makeId, FONT_WIDTH, createShapeWithLabel, createBoundArrow } from "./elements.js";
 import { ExcaliDashProvider } from "./excalidash.js";
 
 const provider = new ExcaliDashProvider();
@@ -164,21 +164,10 @@ server.registerTool("add_shape", {
 }, async ({ board_id, shape, x, y, width, height, color, fill, label }) => {
   try {
     const w = width || 160, h = height || 80;
-    const els = [enrichElement({
-      type: shape, x, y, width: w, height: h,
-      strokeColor: resolveColor(color || "black"),
-      backgroundColor: fill ? resolveFill(fill) : "transparent",
-    })];
-    if (label) {
-      els[0].boundElements = [{ id: `${els[0].id}-label`, type: "text" }];
-      els.push(enrichElement({
-        type: "text", x: x + w * 0.1, y: y + h * 0.3,
-        text: label, fontSize: 16, fontFamily: 1,
-        strokeColor: resolveColor(color || "black"),
-        containerId: els[0].id, textAlign: "center", verticalAlign: "middle",
-        strokeWidth: 1, roughness: 0, id: `${els[0].id}-label`,
-      }));
-    }
+    const els = createShapeWithLabel(
+      { type: shape, x, y, width: w, height: h, strokeColor: resolveColor(color || "black"), backgroundColor: fill ? resolveFill(fill) : "transparent" },
+      label, { strokeColor: resolveColor(color || "black") }
+    );
     const r = await pushElements(board_id, els);
     return { content: [{ type: "text", text: `Added ${shape}${label ? ` "${label}"` : ""} (${r.total} total)` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }

@@ -1,6 +1,6 @@
 /**
  * Excalidraw element builder & helpers.
- * Shared across all providers — no backend dependency.
+ * Produces well-formed elements with proper text centering and arrow bindings.
  */
 
 // ============================================================
@@ -27,9 +27,8 @@ let idCounter = 0;
 
 export function makeId() { return `xmcp-${Date.now()}-${idCounter++}`; }
 
-export function enrichElement(el) {
-  const now = Date.now();
-  const enriched = {
+function baseProps(el) {
+  return {
     id: makeId(),
     angle: 0,
     strokeColor: "#1e1e1e",
@@ -41,18 +40,32 @@ export function enrichElement(el) {
     opacity: 100,
     groupIds: [],
     frameId: null,
-    roundness: el.type === "text" ? null : { type: (el.type === "line" || el.type === "arrow") ? 2 : 3 },
     seed: Math.floor(Math.random() * 2147483647),
     version: 2,
     versionNonce: Math.floor(Math.random() * 2147483647),
     isDeleted: false,
     boundElements: [],
-    updated: now,
+    updated: Date.now(),
     link: null,
     locked: false,
     ...el,
   };
+}
 
+export function enrichElement(el) {
+  const enriched = baseProps(el);
+
+  // Roundness per type
+  if (!enriched.roundness && enriched.type !== "text") {
+    if (enriched.type === "line" || enriched.type === "arrow") {
+      enriched.roundness = { type: 2 };
+    } else if (enriched.type === "diamond" || enriched.type === "rectangle" || enriched.type === "ellipse") {
+      enriched.roundness = { type: 3 };
+    }
+  }
+  if (enriched.type === "text") enriched.roundness = null;
+
+  // Text-specific
   if (enriched.type === "text") {
     const fontSize = enriched.fontSize || 20;
     const fontFamily = enriched.fontFamily || 1;
@@ -73,12 +86,15 @@ export function enrichElement(el) {
     enriched.fontSize = fontSize;
   }
 
+  // Arrow/line
   if (enriched.type === "arrow" || enriched.type === "line") {
     enriched.points = enriched.points || [[0, 0], [enriched.width || 100, enriched.height || 0]];
     enriched.lastCommittedPoint = null;
     if (enriched.type === "arrow") {
       enriched.startArrowhead = enriched.startArrowhead ?? null;
       enriched.endArrowhead = enriched.endArrowhead ?? "arrow";
+      enriched.startBinding = enriched.startBinding ?? null;
+      enriched.endBinding = enriched.endBinding ?? null;
     }
   }
 
@@ -86,18 +102,106 @@ export function enrichElement(el) {
 }
 
 // ============================================================
+// Shape + label helper (creates properly bound shape + text)
+// ============================================================
+export function createShapeWithLabel(shapeProps, labelText, labelProps = {}) {
+  const shape = enrichElement(shapeProps);
+  if (!labelText) return [shape];
+
+  const fontSize = labelProps.fontSize || 16;
+  const fontFamily = labelProps.fontFamily || 1;
+  const labelId = `${shape.id}-label`;
+
+  // Shape gets boundElements reference to label
+  shape.boundElements = [...(shape.boundElements || []), { id: labelId, type: "text" }];
+
+  // Label is centered inside the shape via containerId
+  const label = enrichElement({
+    type: "text",
+    id: labelId,
+    text: labelText,
+    fontSize,
+    fontFamily,
+    strokeColor: labelProps.strokeColor || shape.strokeColor,
+    containerId: shape.id,
+    textAlign: "center",
+    verticalAlign: "middle",
+    strokeWidth: 1,
+    roughness: 0,
+    // Position at shape center (browser will auto-adjust with containerId)
+    x: shape.x + shape.width / 2,
+    y: shape.y + shape.height / 2,
+    originalText: labelText,
+    autoResize: true,
+  });
+
+  return [shape, label];
+}
+
+// ============================================================
+// Arrow with bindings helper
+// ============================================================
+export function createBoundArrow(arrowProps, fromShapeId, toShapeId, allElements) {
+  const arrow = enrichElement({ type: "arrow", ...arrowProps });
+
+  // Bind to source shape
+  if (fromShapeId) {
+    const fromShape = allElements.find(e => e.id === fromShapeId || e._dslId === fromShapeId);
+    if (fromShape) {
+      arrow.startBinding = {
+        elementId: fromShape.id,
+        focus: 0,
+        gap: 8,
+        fixedPoint: null,
+      };
+      // Add arrow to shape's boundElements
+      fromShape.boundElements = [...(fromShape.boundElements || []), { id: arrow.id, type: "arrow" }];
+    }
+  }
+
+  // Bind to target shape
+  if (toShapeId) {
+    const toShape = allElements.find(e => e.id === toShapeId || e._dslId === toShapeId);
+    if (toShape) {
+      arrow.endBinding = {
+        elementId: toShape.id,
+        focus: 0,
+        gap: 8,
+        fixedPoint: null,
+      };
+      toShape.boundElements = [...(toShape.boundElements || []), { id: arrow.id, type: "arrow" }];
+    }
+  }
+
+  return arrow;
+}
+
+// ============================================================
 // DSL parser for draw_scene
+//
+// Syntax:
+//   TYPE [ID] x,y [WxH] [key=val ...] ['label text']
+//   arrow [ID] x,y -> x2,y2 [from=ID] [to=ID] [key=val ...] ['label']
+//
+// IDs allow arrows to bind to shapes:
+//   rect frontend 100,100 200x100 color=blue fill=blue 'Frontend'
+//   rect backend 400,100 200x100 color=green fill=green 'Backend'
+//   arrow 300,150 -> 400,150 from=frontend to=backend color=gray 'API'
 // ============================================================
 export function parseDSL(dsl) {
   const elements = [];
+  const idMap = new Map(); // DSL ID -> element
+
   for (const raw of dsl.split("\n")) {
     const line = raw.trim();
     if (!line || line.startsWith("#") || line.startsWith("//")) continue;
 
+    // Extract quoted text
     const textMatch = line.match(/'([^']+)'|"([^"]+)"/);
     const text = textMatch ? (textMatch[1] || textMatch[2]) : null;
     const withoutText = line.replace(/'[^']*'|"[^"]*"/, "").trim();
     const tokens = withoutText.split(/\s+/);
+
     const type = tokens[0]?.toLowerCase();
     if (!type) continue;
 
@@ -109,14 +213,25 @@ export function parseDSL(dsl) {
     const exType = typeMap[type];
     if (!exType) continue;
 
-    const coordMatch = tokens[1]?.match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
+    // Check if second token is an ID (not coordinates, not key=val, not ->)
+    let dslId = null;
+    let coordTokenIdx = 1;
+    if (tokens[1] && !tokens[1].includes(",") && !tokens[1].includes("=") && tokens[1] !== "->") {
+      dslId = tokens[1];
+      coordTokenIdx = 2;
+    }
+
+    // Parse coordinates
+    const coordMatch = tokens[coordTokenIdx]?.match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);
     const x = coordMatch ? parseFloat(coordMatch[1]) : 0;
     const y = coordMatch ? parseFloat(coordMatch[2]) : 0;
 
+    // Parse size (WxH)
     let width = 0, height = 0;
     const sizeToken = tokens.find(t => /^\d+x\d+$/.test(t));
     if (sizeToken) [width, height] = sizeToken.split("x").map(Number);
 
+    // Parse arrow target: -> x,y
     let arrowEndX = 0, arrowEndY = 0;
     const arrowIdx = tokens.indexOf("->");
     if (arrowIdx >= 0 && tokens[arrowIdx + 1]) {
@@ -124,6 +239,7 @@ export function parseDSL(dsl) {
       if (m) { arrowEndX = parseFloat(m[1]); arrowEndY = parseFloat(m[2]); }
     }
 
+    // Parse key=value pairs
     const props = {};
     for (const t of tokens) {
       const kv = t.match(/^(\w+)=(.+)$/);
@@ -134,34 +250,75 @@ export function parseDSL(dsl) {
     const fill = props.fill ? resolveFill(props.fill) : "transparent";
     const fontSize = props.size ? parseInt(props.size) : 20;
 
-    const el = { type: exType, x, y, strokeColor: color, backgroundColor: fill };
-
     if (exType === "text") {
-      el.text = text || props.label || "text";
-      el.fontSize = fontSize;
-      el.fontFamily = props.font ? parseInt(props.font) : 1;
-      el.strokeWidth = 1;
-      el.roughness = 0;
-    } else if (exType === "arrow" || exType === "line") {
-      if (arrowIdx >= 0) {
-        el.width = arrowEndX - x;
-        el.height = arrowEndY - y;
-      } else {
-        el.width = width || 100;
-        el.height = height || 0;
-      }
-      el.points = [[0, 0], [el.width, el.height]];
-      if (props.style) el.strokeStyle = props.style;
-      if (exType === "arrow") {
-        el.startArrowhead = ["arrow", "dot", "bar", "triangle"].includes(props.start) ? props.start : null;
-        el.endArrowhead = props.end === "none" ? null : (props.end || "arrow");
-      }
-    } else {
-      el.width = width || 160;
-      el.height = height || 80;
-    }
+      // Free-standing text
+      const el = enrichElement({
+        type: "text", x, y,
+        text: text || props.label || "text",
+        fontSize, fontFamily: props.font ? parseInt(props.font) : 1,
+        strokeColor: color, strokeWidth: 1, roughness: 0,
+      });
+      if (dslId) { el._dslId = dslId; idMap.set(dslId, el); }
+      elements.push(el);
 
-    elements.push(enrichElement(el));
+    } else if (exType === "arrow" || exType === "line") {
+      // Arrow/line
+      const dx = arrowIdx >= 0 ? arrowEndX - x : (width || 100);
+      const dy = arrowIdx >= 0 ? arrowEndY - y : (height || 0);
+
+      const arrowEl = {
+        type: exType, x, y, width: dx, height: dy,
+        points: [[0, 0], [dx, dy]],
+        strokeColor: color,
+        strokeStyle: props.style || "solid",
+      };
+      if (exType === "arrow") {
+        arrowEl.startArrowhead = ["arrow", "dot", "bar", "triangle"].includes(props.start) ? props.start : null;
+        arrowEl.endArrowhead = props.end === "none" ? null : (props.end || "arrow");
+      }
+
+      // Bindings
+      if (props.from || props.to) {
+        const arrow = createBoundArrow(arrowEl, props.from, props.to, elements);
+        if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
+        elements.push(arrow);
+      } else {
+        const arrow = enrichElement(arrowEl);
+        if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
+        elements.push(arrow);
+      }
+
+      // Arrow label
+      if (text) {
+        elements.push(enrichElement({
+          type: "text",
+          x: x + dx / 2 - 20, y: y + dy / 2 - 15,
+          text, fontSize: 14, fontFamily: 1,
+          strokeColor: resolveColor(props.color || "gray"),
+          strokeWidth: 1, roughness: 0,
+        }));
+      }
+
+    } else {
+      // Shape (rect, ellipse, diamond) with optional label
+      const w = width || 160, h = height || 80;
+      const shapeProps = {
+        type: exType, x, y, width: w, height: h,
+        strokeColor: color, backgroundColor: fill,
+      };
+
+      if (text) {
+        const [shape, label] = createShapeWithLabel(shapeProps, text, { strokeColor: color, fontSize: Math.min(fontSize, 18) });
+        if (dslId) { shape._dslId = dslId; idMap.set(dslId, shape); }
+        elements.push(shape, label);
+      } else {
+        const shape = enrichElement(shapeProps);
+        if (dslId) { shape._dslId = dslId; idMap.set(dslId, shape); }
+        elements.push(shape);
+      }
+    }
   }
-  return elements;
+
+  // Clean up internal _dslId before returning
+  return elements.map(el => { const { _dslId, ...rest } = el; return rest; });
 }
