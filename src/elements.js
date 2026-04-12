@@ -36,7 +36,7 @@ function baseProps(el) {
     fillStyle: "solid",
     strokeWidth: 2,
     strokeStyle: "solid",
-    roughness: 1,
+    roughness: 0,       // crisp/modern (not hand-drawn)
     opacity: 100,
     groupIds: [],
     frameId: null,
@@ -215,8 +215,8 @@ function shapeEdgePoint(shape, targetX, targetY) {
 }
 
 export function createBoundArrow(arrowProps, fromShapeId, toShapeId, allElements) {
-  const fromShape = fromShapeId ? allElements.find(e => e.id === fromShapeId || e._dslId === fromShapeId) : null;
-  const toShape = toShapeId ? allElements.find(e => e.id === toShapeId || e._dslId === toShapeId) : null;
+  const fromShape = fromShapeId ? allElements.find(e => e.id === fromShapeId) : null;
+  const toShape = toShapeId ? allElements.find(e => e.id === toShapeId) : null;
 
   // Auto-calculate arrow coordinates from shape edges
   if (fromShape && toShape) {
@@ -342,11 +342,12 @@ export function parseDSL(dsl) {
       // Free-standing text
       const el = enrichElement({
         type: "text", x, y,
+        ...(dslId ? { id: dslId } : {}),
         text: text || props.label || "text",
-        fontSize, fontFamily: props.font ? parseInt(props.font) : 1,
+        fontSize, fontFamily: props.font ? parseInt(props.font) : 3,
         strokeColor: color, strokeWidth: 1, roughness: 0,
       });
-      if (dslId) { el._dslId = dslId; idMap.set(dslId, el); }
+      if (dslId) idMap.set(dslId, el);
       elements.push(el);
 
     } else if (exType === "arrow" || exType === "line") {
@@ -365,6 +366,9 @@ export function parseDSL(dsl) {
         arrowEl.endArrowhead = props.end === "none" ? null : (props.end || "arrow");
       }
 
+      // Use DSL ID as element ID
+      if (dslId) arrowEl.id = dslId;
+
       // Bindings
       let arrow;
       if (props.from || props.to) {
@@ -372,7 +376,7 @@ export function parseDSL(dsl) {
       } else {
         arrow = enrichElement(arrowEl);
       }
-      if (dslId) { arrow._dslId = dslId; idMap.set(dslId, arrow); }
+      if (dslId) idMap.set(dslId, arrow);
       elements.push(arrow);
 
       // Arrow label (positioned at arrow midpoint)
@@ -397,6 +401,9 @@ export function parseDSL(dsl) {
         strokeColor: color, backgroundColor: fill,
       };
 
+      // Use DSL ID as element ID if provided (descriptive, readable)
+      if (dslId) shapeProps.id = dslId;
+
       if (text) {
         // Details: from props (pipe-separated) or second quoted string
         const detailStr = props.details
@@ -409,16 +416,15 @@ export function parseDSL(dsl) {
           fontSize: Math.min(fontSize, 18),
           details: detailStr,
         });
-        if (dslId) { shapeEls[0]._dslId = dslId; idMap.set(dslId, shapeEls[0]); }
+        if (dslId) idMap.set(dslId, shapeEls[0]);
         elements.push(...shapeEls);
       } else {
         const shape = enrichElement(shapeProps);
-        if (dslId) { shape._dslId = dslId; idMap.set(dslId, shape); }
+        if (dslId) idMap.set(dslId, shape);
         elements.push(shape);
       }
     }
   }
 
-  // Clean up internal _dslId before returning
-  return elements.map(el => { const { _dslId, ...rest } = el; return rest; });
+  return elements;
 }
