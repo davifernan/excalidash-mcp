@@ -22,7 +22,7 @@ export function resolveFill(c) { return FILLS[c] || c || "transparent"; }
 // ============================================================
 // Element builder
 // ============================================================
-const FONT_WIDTH = { 1: 0.6, 2: 0.55, 3: 0.55 }; // Virgil, Helvetica, Cascadia
+export const FONT_WIDTH = { 1: 0.6, 2: 0.55, 3: 0.55 }; // Virgil, Helvetica, Cascadia
 let idCounter = 0;
 
 export function makeId() { return `xmcp-${Date.now()}-${idCounter++}`; }
