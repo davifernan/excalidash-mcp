@@ -118,7 +118,9 @@ async function pushElements(boardId, newElements, mode = "append") {
     socketElements = convertedNew;
   }
 
-  const elementOrder = merged.map(e => e.id);
+  // elementOrder controls z-ordering: first = back, last = front
+  // Only include active (non-deleted) elements, in our z-ordered sequence
+  const elementOrder = merged.filter(e => !e.isDeleted).map(e => e.id);
   await provider.pushLive(boardId, socketElements, elementOrder);
   await provider.updateDrawing(boardId, merged);
 
