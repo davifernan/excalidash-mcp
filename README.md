@@ -12,20 +12,20 @@ https://github.com/user-attachments/assets/placeholder-demo.mp4
 - **Named Elements** — Give elements descriptive IDs (`rect frontend 100,100 ...`) for easy reference
 - **Edit & Delete** — Modify or remove elements by name, live
 - **Rename** — Rename cryptic auto-generated IDs to descriptive names
-- **Version History** — Browse snapshots, restore previous versions (requires [ExcaliDash fork](https://github.com/davifernan/ExcaliDash))
+- **Version History** — Browse snapshots, restore previous versions (requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138))
 - **Library** — Search and place icons/templates from your ExcaliDash library
 - **Token-efficient** — ~85% fewer tokens compared to raw Excalidraw JSON
 
 ## Prerequisites
 
-You need a running [ExcaliDash](https://github.com/davifernan/ExcaliDash) instance (our fork with version history support). ExcaliDash is a self-hosted Excalidraw dashboard with user management, REST API, and real-time collaboration.
+You need a running [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) instance. ExcaliDash is a self-hosted Excalidraw dashboard with user management, REST API, and real-time collaboration.
 
 ### 1. Set up ExcaliDash
 
-Follow the [ExcaliDash installation guide](https://github.com/davifernan/ExcaliDash) to get your instance running. Typically:
+Follow the [ExcaliDash installation guide](https://github.com/ZimengXiong/ExcaliDash) to get your instance running. Typically:
 
 ```bash
-git clone https://github.com/davifernan/ExcaliDash.git
+git clone https://github.com/ZimengXiong/ExcaliDash.git
 cd ExcaliDash
 cp .env.example .env  # configure JWT_SECRET, CSRF_SECRET, etc.
 docker compose up -d
@@ -197,7 +197,7 @@ circle queue 500,280 80x80 color=purple fill=purple
 
 ### Version History
 
-Requires [ExcaliDash fork](https://github.com/davifernan/ExcaliDash) with history support.
+Requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138) (pending merge).
 
 | Tool | Description |
 |------|-------------|
