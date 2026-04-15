@@ -141,6 +141,15 @@ export class ExcaliDashProvider {
     const data = await this.#get("/library");
     return data?.items || [];
   }
+  async getDrawingHistory(id, limit = 50) {
+    return this.#get(`/drawings/${id}/history?limit=${limit}`);
+  }
+  async getDrawingSnapshot(drawingId, snapshotId) {
+    return this.#get(`/drawings/${drawingId}/history/${snapshotId}`);
+  }
+  async restoreSnapshot(drawingId, snapshotId) {
+    return this.#post(`/drawings/${drawingId}/history/${snapshotId}/restore`, {});
+  }
 
   async joinRoom(drawingId) {
     if (this.joinedRooms.has(drawingId)) return;

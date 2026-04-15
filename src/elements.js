@@ -31,7 +31,10 @@ export function resolveFill(c) { return FILLS[c] || c || "transparent"; }
 // DSL Parser
 // ============================================================
 let _idCounter = 0;
-function nextId() { return `el-${Date.now()}-${_idCounter++}`; }
+function nextId(name) {
+  if (name) return name;
+  return `el-${Date.now()}-${_idCounter++}`;
+}
 
 function computeFixedPoints(fromShape, toShape) {
   const dx = (toShape.x + toShape.width / 2) - (fromShape.x + fromShape.width / 2);
@@ -89,6 +92,10 @@ export function parseDSL(dsl) {
     if (tokens[1] && !tokens[1].includes(",") && !tokens[1].includes("=") && tokens[1] !== "->") {
       id = tokens[1]; coordIdx = 2;
     }
+
+    // Also check name=xxx in props (parsed later, but peek here for ID)
+    const nameToken = tokens.find(t => /^name=/.test(t));
+    if (!id && nameToken) id = nameToken.split("=")[1];
     if (!id) id = nextId();
 
     const cm = tokens[coordIdx]?.match(/^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/);

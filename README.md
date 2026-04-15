@@ -9,20 +9,23 @@ https://github.com/user-attachments/assets/placeholder-demo.mp4
 - **Live updates** — Elements appear instantly in open browsers, no refresh needed
 - **High-level tools** — `add_text`, `add_shape`, `add_arrow` with minimal tokens
 - **Scene DSL** — Draw complex diagrams with a compact one-line-per-element syntax
-- **Edit & Delete** — Modify or remove individual elements by ID, live
+- **Named Elements** — Give elements descriptive IDs (`rect frontend 100,100 ...`) for easy reference
+- **Edit & Delete** — Modify or remove elements by name, live
+- **Rename** — Rename cryptic auto-generated IDs to descriptive names
+- **Version History** — Browse snapshots, restore previous versions (requires [ExcaliDash fork](https://github.com/davifernan/ExcaliDash))
 - **Library** — Search and place icons/templates from your ExcaliDash library
 - **Token-efficient** — ~85% fewer tokens compared to raw Excalidraw JSON
 
 ## Prerequisites
 
-You need a running [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) instance. ExcaliDash is a self-hosted Excalidraw dashboard with user management, REST API, and real-time collaboration.
+You need a running [ExcaliDash](https://github.com/davifernan/ExcaliDash) instance (our fork with version history support). ExcaliDash is a self-hosted Excalidraw dashboard with user management, REST API, and real-time collaboration.
 
 ### 1. Set up ExcaliDash
 
-Follow the [ExcaliDash installation guide](https://github.com/ZimengXiong/ExcaliDash) to get your instance running. Typically:
+Follow the [ExcaliDash installation guide](https://github.com/davifernan/ExcaliDash) to get your instance running. Typically:
 
 ```bash
-git clone https://github.com/ZimengXiong/ExcaliDash.git
+git clone https://github.com/davifernan/ExcaliDash.git
 cd ExcaliDash
 cp .env.example .env  # configure JWT_SECRET, CSRF_SECRET, etc.
 docker compose up -d
@@ -155,18 +158,18 @@ If your ExcaliDash backend has `TRUST_PROXY=true` (common when behind Nginx/Clou
 
 ### Scene DSL
 
-Draw multiple elements in a single call with minimal tokens:
+Draw multiple elements in a single call with minimal tokens. **Always give elements descriptive IDs** — this makes updating and deleting easy:
 
 ```
 # Comments start with #
-text 250,20 size=28 color=blue 'System Architecture'
+text title 250,20 size=28 color=blue 'System Architecture'
 
-rect 100,100 200x100 color=blue fill=blue 'Frontend'
-rect 400,100 200x100 color=green fill=green 'Backend'
-arrow 300,150 -> 400,150 color=gray style=dashed 'API'
+rect frontend 100,100 200x100 color=blue fill=blue 'Frontend'
+rect backend 400,100 200x100 color=green fill=green 'Backend'
+arrow fe-to-be 300,150 -> 400,150 color=gray style=dashed 'API'
 
-diamond 250,280 120x80 color=orange fill=orange
-circle 500,280 80x80 color=purple fill=purple
+diamond cache 250,280 120x80 color=orange fill=orange
+circle queue 500,280 80x80 color=purple fill=purple
 ```
 
 **Supported types:** `rect`, `circle`, `diamond`, `arrow`, `line`, `text`
@@ -188,8 +191,18 @@ circle 500,280 80x80 color=purple fill=purple
 
 | Tool | Description |
 |------|-------------|
-| `update_element` | Change any property by element ID |
-| `delete_elements` | Delete specific elements by ID |
+| `update_element` | Change any property by element name/ID |
+| `delete_elements` | Delete specific elements by name/ID |
+| `rename_element` | Rename a cryptic ID to a descriptive name (updates all references) |
+
+### Version History
+
+Requires [ExcaliDash fork](https://github.com/davifernan/ExcaliDash) with history support.
+
+| Tool | Description |
+|------|-------------|
+| `board_history` | List version snapshots (ID + timestamp) |
+| `restore_version` | Restore a board to a previous snapshot (reversible) |
 
 ### Library
 

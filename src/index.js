@@ -167,6 +167,21 @@ const server = new McpServer({ name: "excalidash-mcp", version: "2.0.0" });
 // ============================================================
 const CHEAT_SHEET = `# ExcaliDash Drawing Guide
 
+## Named Elements (wichtig!)
+Every element SHOULD get a short, descriptive ID right after the type keyword.
+This makes update_element/delete_elements easy — no cryptic IDs to look up.
+
+\`\`\`
+rect frontend 100,100 200x80 ...     → ID = "frontend"
+arrow api-call 0,0 -> 0,0 ...        → ID = "api-call"
+text title 250,20 ...                 → ID = "title"
+\`\`\`
+
+Without a name, elements get auto-generated IDs like "el-1744123456789-0".
+read_board shows all element IDs — named ones are instantly recognizable.
+
+Alternative: \`name=xxx\` as key-value also works: \`rect 100,100 name=frontend ...\`
+
 ## Color Palette
 ### Fills (pastel, for shape backgrounds)
 | Color | Hex | Use |
@@ -203,19 +218,19 @@ Use | without spaces for line breaks. With spaces stays literal: "A | B | C"
 
 ### Arrows (bound to shapes)
 \`\`\`
-arrow 0,0 -> 0,0 from=ID to=ID color=C 'Label'
+arrow ARROW-ID 0,0 -> 0,0 from=SHAPE-ID to=SHAPE-ID color=C 'Label'
 \`\`\`
 Coordinates auto-calculated from shape edges. Just use 0,0 -> 0,0.
 Arrow styles: style=dashed, start=arrow, end=triangle/dot/bar/none
 
 ### Arrows (manual coordinates)
 \`\`\`
-arrow x1,y1 -> x2,y2 color=C 'Label'
+arrow ARROW-ID x1,y1 -> x2,y2 color=C 'Label'
 \`\`\`
 
 ### Standalone text
 \`\`\`
-text x,y size=28 color=blue 'Title Text'
+text TEXT-ID x,y size=28 color=blue 'Title Text'
 \`\`\`
 
 ## Layout Rules
@@ -227,12 +242,12 @@ text x,y size=28 color=blue 'Title Text'
 
 ## Example
 \`\`\`
-text 250,20 size=28 color=blue 'System Architecture'
+text heading 250,20 size=28 color=blue 'System Architecture'
 rect fe 100,100 200x80 color=blue fill=blue 'Frontend'
 rect be 400,100 200x100 color=green fill=green 'Backend' 'Express.js|PostgreSQL'
-arrow 0,0 -> 0,0 from=fe to=be color=gray 'REST API'
+arrow fe-to-be 0,0 -> 0,0 from=fe to=be color=gray 'REST API'
 diamond db 400,280 150x100 color=orange fill=orange 'Database'
-arrow 0,0 -> 0,0 from=be to=db color=gray 'SQL'
+arrow be-to-db 0,0 -> 0,0 from=be to=db color=gray 'SQL'
 \`\`\`
 `;
 
@@ -268,7 +283,7 @@ server.registerTool("create_board", {
 });
 
 server.registerTool("read_board", {
-  description: "Read all elements from a board (with IDs for editing).",
+  description: "Read all elements from a board. Shows element names/IDs for use with update_element and delete_elements.",
   annotations: { readOnlyHint: true },
   inputSchema: z.object({ board_id: z.string() }),
 }, async ({ board_id }) => {
@@ -300,7 +315,8 @@ server.registerTool("clear_board", {
 server.registerTool("draw_scene", {
   description: `Draw elements with compact DSL. Live updates in open browsers.
 Call read_me first for the full format guide.
-Use mode=replace to clear and redraw. Use mode=append (default) to add to existing.`,
+Use mode=replace to clear and redraw. Use mode=append (default) to add to existing.
+IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...'). This makes update/delete easy.`,
   inputSchema: z.object({
     board_id: z.string(),
     scene: z.string().describe("DSL scene (one element per line)"),
@@ -319,7 +335,7 @@ Use mode=replace to clear and redraw. Use mode=append (default) to add to existi
 // Edit / Delete
 // ============================================================
 server.registerTool("update_element", {
-  description: "Update properties of an existing element by ID.",
+  description: "Update properties of an existing element by its name/ID (e.g. 'frontend', 'api-arrow'). Use read_board to see all element IDs.",
   inputSchema: z.object({
     board_id: z.string(),
     element_id: z.string(),
@@ -346,8 +362,80 @@ server.registerTool("update_element", {
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
+server.registerTool("rename_element", {
+  description: "Rename an element's ID (e.g. 'el-1744123456789-0' → 'frontend'). Updates all references (bindings, containers, boundElements) across the board.",
+  inputSchema: z.object({
+    board_id: z.string(),
+    old_id: z.string().describe("Current element ID"),
+    new_id: z.string().describe("New descriptive name"),
+  }),
+}, async ({ board_id, old_id, new_id }) => {
+  try {
+    await provider.joinRoom(board_id);
+    const existing = await provider.getDrawing(board_id);
+    if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
+    const els = existing.elements || [];
+
+    const idx = els.findIndex(e => e.id === old_id);
+    if (idx < 0) return { content: [{ type: "text", text: `Element "${old_id}" not found` }], isError: true };
+    if (els.some(e => e.id === new_id)) return { content: [{ type: "text", text: `ID "${new_id}" already exists` }], isError: true };
+
+    const now = Date.now();
+    const changed = [];
+
+    for (let i = 0; i < els.length; i++) {
+      let modified = false;
+      const el = { ...els[i] };
+
+      // Rename the element itself
+      if (el.id === old_id) {
+        el.id = new_id;
+        modified = true;
+      }
+
+      // Update containerId reference
+      if (el.containerId === old_id) {
+        el.containerId = new_id;
+        modified = true;
+      }
+
+      // Update boundElements references
+      if (Array.isArray(el.boundElements)) {
+        const newBound = el.boundElements.map(b => {
+          if (b.id === old_id) { modified = true; return { ...b, id: new_id }; }
+          return b;
+        });
+        if (modified) el.boundElements = newBound;
+      }
+
+      // Update arrow bindings
+      if (el.startBinding?.elementId === old_id) {
+        el.startBinding = { ...el.startBinding, elementId: new_id };
+        modified = true;
+      }
+      if (el.endBinding?.elementId === old_id) {
+        el.endBinding = { ...el.endBinding, elementId: new_id };
+        modified = true;
+      }
+
+      if (modified) {
+        el.updated = now;
+        el.version = (els[i].version || 1) + 1;
+        el.versionNonce = Math.floor(Math.random() * 2147483647);
+        changed.push(el);
+      }
+
+      els[i] = el;
+    }
+
+    await provider.pushLive(board_id, changed, els.map(e => e.id));
+    await provider.updateDrawing(board_id, els);
+    return { content: [{ type: "text", text: `Renamed "${old_id}" → "${new_id}" (${changed.length} elements updated)` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
 server.registerTool("delete_elements", {
-  description: "Delete elements by ID.",
+  description: "Delete elements by name/ID (e.g. ['frontend', 'api-arrow']). Use read_board to see all element IDs.",
   inputSchema: z.object({
     board_id: z.string(),
     element_ids: z.array(z.string()),
@@ -418,6 +506,40 @@ server.registerTool("export_png", {
     await page.screenshot({ path: outPath });
     await page.close();
     return { content: [{ type: "text", text: `Screenshot saved: ${outPath}` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
+// ============================================================
+// Version History
+// ============================================================
+server.registerTool("board_history", {
+  description: "Show version history for a board. Returns snapshot IDs and timestamps for use with restore_version.",
+  annotations: { readOnlyHint: true },
+  inputSchema: z.object({
+    board_id: z.string(),
+    limit: z.number().optional().describe("Max entries (default 20)"),
+  }),
+}, async ({ board_id, limit }) => {
+  try {
+    const data = await provider.getDrawingHistory(board_id, limit || 20);
+    if (!data?.snapshots?.length) return { content: [{ type: "text", text: "No history for this board." }] };
+    const lines = data.snapshots.map(s =>
+      `  v${s.version} | ${s.id} | ${new Date(s.createdAt).toISOString()}`
+    );
+    return { content: [{ type: "text", text: `History (${data.totalCount} total):\n${lines.join("\n")}` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
+server.registerTool("restore_version", {
+  description: "Restore a board to a previous version. Current state is auto-snapshotted first (reversible). Use board_history to find snapshot IDs.",
+  inputSchema: z.object({
+    board_id: z.string(),
+    snapshot_id: z.string().describe("Snapshot ID from board_history"),
+  }),
+}, async ({ board_id, snapshot_id }) => {
+  try {
+    const result = await provider.restoreSnapshot(board_id, snapshot_id);
+    return { content: [{ type: "text", text: `Restored board to snapshot ${snapshot_id}. New version: v${result.version}. ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
