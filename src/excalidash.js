@@ -78,33 +78,63 @@ export class ExcaliDashProvider {
   }
 
   // --- REST ---
+  async #reauth() {
+    this.authToken = null;
+    this.csrfToken = null;
+    this.authCookies = [];
+    if (this.socket) { this.socket.disconnect(); this.socket = null; this.joinedRooms.clear(); }
+    await this.#login();
+  }
+
   async #get(path) {
     await this.#login();
-    const res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await fetch(`${this.backendUrl}${path}`, {
       headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
     });
+    if (res.status === 401 || res.status === 403) {
+      await this.#reauth();
+      res = await fetch(`${this.backendUrl}${path}`, {
+        headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+      });
+    }
     if (!res.ok) return null;
     return res.json();
   }
 
   async #post(path, body) {
     await this.#login();
-    const res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await fetch(`${this.backendUrl}${path}`, {
       method: "POST",
       headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
       body: JSON.stringify(body),
     });
+    if (res.status === 401 || res.status === 403) {
+      await this.#reauth();
+      res = await fetch(`${this.backendUrl}${path}`, {
+        method: "POST",
+        headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+        body: JSON.stringify(body),
+      });
+    }
     if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
     return res.json();
   }
 
   async #put(path, body) {
     await this.#login();
-    const res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await fetch(`${this.backendUrl}${path}`, {
       method: "PUT",
       headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
       body: JSON.stringify(body),
     });
+    if (res.status === 401 || res.status === 403) {
+      await this.#reauth();
+      res = await fetch(`${this.backendUrl}${path}`, {
+        method: "PUT",
+        headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+        body: JSON.stringify(body),
+      });
+    }
     if (!res.ok) throw new Error(`PUT ${path}: ${res.status}`);
     return res.json();
   }
