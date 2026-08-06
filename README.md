@@ -1,88 +1,40 @@
 # excalidash-mcp
 
-MCP server for live collaborative drawing on [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash). Draw diagrams, brainstorm, and visualize ideas — changes appear instantly in the browser via Socket.IO.
+**Let Claude draw on your whiteboard.** An MCP server that turns a description of a diagram into real
+Excalidraw elements on your self-hosted [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) —
+appearing live in any browser that has the board open, no refresh.
 
-https://github.com/user-attachments/assets/placeholder-demo.mp4
+![Order processing diagram drawn by the MCP server](assets/02-order-processing.png)
 
-## Features
+<sub>Eight nodes and eight edges, written as plain text. No coordinates by hand.</sub>
 
-- **Live updates** — Elements appear instantly in open browsers, no refresh needed
-- **Auto-layout** — Describe nodes and edges; dagre handles the geometry, so boxes don't collide and arrows don't cut through them
-- **Scene DSL** — Compact one-line-per-element syntax when you want manual placement
-- **Named Elements** — Give elements descriptive IDs (`rect frontend 100,100 ...`) for easy reference
-- **Edit & Delete** — Modify or remove elements by name, live
-- **Rename** — Rename cryptic auto-generated IDs to descriptive names
-- **Version History** — Browse snapshots, restore previous versions (requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138))
-- **Token-efficient** — ~85% fewer tokens compared to raw Excalidraw JSON
+[![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-black.svg)](https://nodejs.org)
+[![MCP](https://img.shields.io/badge/MCP-server-black.svg)](https://modelcontextprotocol.io)
 
-## Prerequisites
+## Why
 
-You need a running [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) instance. ExcaliDash is a self-hosted Excalidraw dashboard with user management, REST API, and real-time collaboration.
+Ask a language model for a diagram and it has to invent pixel coordinates. It is bad at that, and the
+result shows: arrows cut through boxes, labels hide underneath them, text overflows its container.
 
-### 1. Set up ExcaliDash
+So don't ask it to. Describe the **structure** — nodes and edges — and let a layout engine do the
+geometry. Same graph, both ways:
 
-Follow the [ExcaliDash installation guide](https://github.com/ZimengXiong/ExcaliDash) to get your instance running. Typically:
+| ❌ Model picks coordinates | ✅ Model picks structure |
+|---|---|
+| ![](assets/00-before-manual-coordinates.png) | ![](assets/01-after-auto-layout.png) |
+| Arrows through boxes, labels clipped | `draw_graph` + dagre |
 
-```bash
-git clone https://github.com/ZimengXiong/ExcaliDash.git
-cd ExcaliDash
-cp .env.example .env  # configure JWT_SECRET, CSRF_SECRET, etc.
-docker compose up -d
-```
+## Quick start
 
-### 2. No proxy config needed — use `/api`
-
-**You do not need to write or mount an Nginx config.** The ExcaliDash frontend image already
-proxies both routes this adapter needs, out of the box:
-
-- `/api/` → the backend (the `/api` prefix is stripped, so `/api/drawings` reaches `/drawings`)
-- `/socket.io/` → the backend, with WebSocket upgrade headers
-
-So point `EXCALIDASH_BACKEND_URL` at `https://your-domain/api` and everything works through your
-existing setup — no extra ports, no custom Nginx, no changes to your compose file.
-
-> **Note:** earlier versions of this README told you to mount a custom `nginx.conf` at
-> `/etc/nginx/conf.d/default.conf`. That advice was wrong. The frontend image renders its config to
-> `/etc/nginx/nginx.conf` at startup and never includes `conf.d/`, so the mount silently does
-> nothing. If you followed it, you can drop the mount.
-
-### 3. Create an agent user
-
-Create a dedicated user for the MCP adapter in ExcaliDash. This keeps agent actions separate from your personal account and shows up as a distinct collaborator on the board.
-
-You can create a user via the ExcaliDash UI or API.
-
-### 4. (Optional) Expose the backend port
-
-Only relevant if the MCP adapter runs **on the same machine** as ExcaliDash and you want to skip the
-Nginx hop:
-
-```yaml
-backend:
-  ports:
-    - "127.0.0.1:6768:8000"
-```
-
-Then use `EXCALIDASH_BACKEND_URL=http://127.0.0.1:6768` instead of the `/api` URL. If the backend
-runs with `TRUST_PROXY`, also set `EXCALIDASH_PROXY_PROTO` and `EXCALIDASH_PROXY_HOST` — otherwise
-it answers with a 302 to your public URL.
-
-## Installation
+You need a running ExcaliDash instance and a user account for the agent to draw as.
 
 ```bash
 git clone https://github.com/davifernan/excalidash-mcp.git
-cd excalidash-mcp
-npm install
+cd excalidash-mcp && npm install
 ```
 
-## Configuration
-
-Add to your MCP client config (e.g. `~/.mcp.json` for Claude Code).
-
-### Recommended — MCP client anywhere, ExcaliDash behind a domain
-
-This is the usual case: ExcaliDash runs on a server, your MCP client runs on your laptop. Both URLs
-are your public domain; the backend is reached through the frontend's built-in `/api` proxy.
+Add it to your MCP client (`~/.mcp.json` for Claude Code):
 
 ```json
 {
@@ -101,180 +53,74 @@ are your public domain; the backend is reached through the frontend's built-in `
 }
 ```
 
-Nothing else is required — no exposed backend port and no custom proxy rules.
+> [!TIP]
+> Point `EXCALIDASH_BACKEND_URL` at your instance's **`/api`** path. The ExcaliDash frontend proxies
+> it to the backend already, so no custom Nginx config and no exposed ports are needed.
+> See [docs/setup.md](docs/setup.md) for the details and the same-host alternative.
 
-### Same-host — MCP client on the ExcaliDash machine
+## Drawing
 
-Slightly lower latency, but needs the backend port exposed (see step 4 above). If the backend runs
-with `TRUST_PROXY`, the proxy hints are required or it will answer with redirects:
-
-```json
-{
-  "env": {
-    "EXCALIDASH_BACKEND_URL": "http://127.0.0.1:6768",
-    "EXCALIDASH_URL": "https://draw.example.com",
-    "EXCALIDASH_EMAIL": "agent@example.com",
-    "EXCALIDASH_PASSWORD": "your-agent-password",
-    "EXCALIDASH_PROXY_PROTO": "https",
-    "EXCALIDASH_PROXY_HOST": "draw.example.com"
-  }
-}
-```
-
-## Tools
-
-### Drawing (token-efficient)
-
-| Tool | Description |
-|------|-------------|
-| `read_me` | Element format cheat sheet — call once before drawing |
-| `draw_graph` | Node/edge diagram with **automatic layout** — no coordinates needed |
-| `draw_scene` | Compact DSL with absolute coordinates — for free-form placement |
-
-### Graph DSL (recommended)
-
-For anything made of boxes and arrows, describe the structure and let the layout engine place it.
-Boxes are sized to their labels, arrows stay out of unrelated boxes, and edge labels get their own
-space — the failure modes you get from asking a model to invent pixel coordinates.
+Ask for a diagram in plain language — the agent writes the DSL. This is what it writes:
 
 ```
 direction LR
-title 'Event Processing'
-node ingest 'Event Ingestion Gateway' color=blue fill=blue
-node queue 'Kafka' color=purple fill=purple
-node worker 'Stream Worker' color=green fill=green
-node dlq 'Dead Letter Queue' color=red fill=red
-edge ingest -> queue 'publish'
-edge queue -> worker 'consume'
-edge queue -> dlq 'on failure' color=red
+title 'Deploy Pipeline'
+node push 'git push' color=gray fill=gray
+node lint 'Lint' color=blue fill=blue
+node test 'Test Suite' color=blue fill=blue
+node gate 'All green?' shape=diamond color=orange fill=orange
+node build 'Build Image' color=purple fill=purple
+node stage 'Staging' color=green fill=green
+node prod 'Production' color=green fill=green
+node roll 'Rollback' color=red fill=red
+edge push -> lint
+edge push -> test
+edge lint -> gate
+edge test -> gate
+edge gate -> build 'yes'
+edge gate -> roll 'no'
+edge build -> stage 'auto'
+edge stage -> prod 'manual approve'
+edge prod -> roll 'on error' color=red style=dashed
 ```
 
-**Directions:** `LR`, `TB` (default), `RL`, `BT` · **Shapes:** `rect`, `circle`, `diamond` ·
-Long labels wrap automatically.
+![Deploy pipeline diagram](assets/03-deploy-pipeline.png)
 
-### Scene DSL (manual placement)
+Boxes are sized to fit their labels, long labels wrap, edge labels get their own space, and parallel
+edges fan apart instead of stacking. **Directions:** `LR`, `TB`, `RL`, `BT` · **Shapes:** `rect`,
+`circle`, `diamond` · **Colors:** `blue`, `green`, `orange`, `purple`, `red`, `yellow`, `teal`,
+`pink`, `gray` — or any hex code.
 
-For annotations, legends and free-form sketches, where you want to decide where things go. Takes
-absolute coordinates. **Always give elements descriptive IDs** — this makes updating and deleting easy:
+For annotations, legends and free-form sketches there is a second DSL that takes absolute
+coordinates — see [docs/scene-dsl.md](docs/scene-dsl.md).
 
-```
-# Comments start with #
-text title 250,20 size=28 color=blue 'System Architecture'
+## Tools
 
-rect frontend 100,100 200x100 color=blue fill=blue 'Frontend'
-rect backend 400,100 200x100 color=green fill=green 'Backend'
-arrow fe-to-be 300,150 -> 400,150 color=gray style=dashed 'API'
+| Tool | What it does |
+|------|--------------|
+| `draw_graph` | Node/edge diagram with automatic layout — **start here** |
+| `draw_scene` | Place elements at absolute coordinates |
+| `read_me` | Format cheat sheet; the agent calls this once before drawing |
+| `list_boards` · `create_board` · `read_board` · `clear_board` | Board management |
+| `update_element` · `delete_elements` · `rename_element` | Edit by name, live |
+| `board_history` · `restore_version` | Browse and restore snapshots<sup>†</sup> |
+| `export_png` | Render a board to PNG, framed on the drawing |
 
-diamond cache 250,280 120x80 color=orange fill=orange
-circle queue 500,280 80x80 color=purple fill=purple
-```
-
-**Supported types:** `rect`, `circle`, `diamond`, `arrow`, `line`, `text`
-
-**Colors:** `red`, `blue`, `green`, `orange`, `purple`, `pink`, `yellow`, `gray`, `black` — or any hex code (`#e03131`)
-
-**Arrow options:** `style=dashed`, `start=arrow`, `end=triangle`
-
-### Board Management
-
-| Tool | Description |
-|------|-------------|
-| `list_boards` | List all boards |
-| `create_board` | Create a new board |
-| `read_board` | Read elements with IDs (for editing) |
-| `clear_board` | Remove all elements |
-
-### Editing
-
-| Tool | Description |
-|------|-------------|
-| `update_element` | Change any property by element name/ID |
-| `delete_elements` | Delete specific elements by name/ID |
-| `rename_element` | Rename a cryptic ID to a descriptive name (updates all references) |
-
-### Version History
-
-Requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138) (pending merge).
-
-| Tool | Description |
-|------|-------------|
-| `board_history` | List version snapshots (ID + timestamp) |
-| `restore_version` | Restore a board to a previous snapshot (reversible) |
-
-### Export
-
-| Tool | Description |
-|------|-------------|
-| `export_png` | Render a board to PNG via Excalidraw's own export — framed on the drawing, 2x by default |
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `EXCALIDASH_BACKEND_URL` | Yes | Where the backend is reachable — `https://draw.example.com/api` (through the frontend proxy) or `http://127.0.0.1:6768` (direct). A path prefix like `/api` is supported and is applied to Socket.IO too. |
-| `EXCALIDASH_URL` | Yes | Public frontend URL, used to build board links (e.g. `https://draw.example.com`) |
-| `EXCALIDASH_EMAIL` | Yes | Agent user email |
-| `EXCALIDASH_PASSWORD` | Yes | Agent user password |
-| `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly, to avoid redirects |
-| `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
-
-## Troubleshooting
-
-**`Expected JSON from … but got HTML`** — the URL in `EXCALIDASH_BACKEND_URL` is being answered by
-the frontend instead of the backend. Almost always a missing `/api` suffix. Verify with:
-
-```bash
-curl -sS https://draw.example.com/api/health    # → {"status":"ok"}
-curl -sS https://draw.example.com/health        # → HTML, this is expected
-```
-
-**Login fails with a 302 / redirect** — you are pointing at the backend directly while it runs with
-`TRUST_PROXY`. Add `EXCALIDASH_PROXY_PROTO=https` and `EXCALIDASH_PROXY_HOST=your-domain`, or switch
-to the `/api` URL.
-
-**REST works but nothing appears live** — Socket.IO isn't getting through. Your proxy must forward
-`/socket.io/` with the `Upgrade`/`Connection` headers. The stock frontend image does this already;
-custom proxies in front of it (Cloudflare, Traefik, another Nginx) need WebSockets enabled.
-
-### Running on a PaaS (Coolify, Dokku, …)
-
-The `/api` setup above needs no platform-specific work. If your platform puts its own proxy in front
-of ExcaliDash, the things worth knowing are that the platform usually wants to own Docker networking
-(a custom `networks:` block can isolate your containers from the platform proxy and produce a 504),
-and that Docker Compose interpolates `$` inside inline `configs:` blocks.
-
-[@dadof3bytes](https://github.com/dadof3bytes) wrote up a detailed Coolify field guide in
-[issue #1](https://github.com/davifernan/excalidash-mcp/issues/1) — worth reading if you deploy
-there.
+<sup>†</sup> Version history needs ExcaliDash with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138).
 
 ## How it works
 
-```
-Claude / AI Agent
-       │
-       │ MCP tool calls (draw_scene, update_element, etc.)
-       ▼
-┌─────────────────┐
-│  excalidash-mcp │  ← enriches elements, calculates text dimensions
-│  (MCP Server)   │
-└───────┬─────────┘
-        │
-   ┌────┴────┐
-   │         │
-   ▼         ▼
-Socket.IO   REST API
-(live)      (persist)
-   │         │
-   └────┬────┘
-        ▼
-┌─────────────────┐
-│   ExcaliDash    │  ← self-hosted Excalidraw dashboard
-│   Backend       │
-└───────┬─────────┘
-        │
-        ▼
-   Browser(s)  ← instant live updates, no refresh
-```
+![Architecture: agent to MCP server to ExcaliDash to browser](assets/how-it-works.png)
+
+The server pushes over Socket.IO **and** persists over REST, which is why elements show up in an open
+board immediately and still survive a reload. Every diagram in this README was drawn by the server
+itself and exported with `export_png`.
+
+## Docs
+
+- [Setup](docs/setup.md) — ExcaliDash instance, the `/api` path, environment variables
+- [Scene DSL](docs/scene-dsl.md) — manual placement, element reference
+- [Troubleshooting](docs/troubleshooting.md) — HTML instead of JSON, redirects, missing live updates
 
 ## License
 
