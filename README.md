@@ -7,7 +7,8 @@ https://github.com/user-attachments/assets/placeholder-demo.mp4
 ## Features
 
 - **Live updates** — Elements appear instantly in open browsers, no refresh needed
-- **Scene DSL** — Draw complex diagrams with a compact one-line-per-element syntax
+- **Auto-layout** — Describe nodes and edges; dagre handles the geometry, so boxes don't collide and arrows don't cut through them
+- **Scene DSL** — Compact one-line-per-element syntax when you want manual placement
 - **Named Elements** — Give elements descriptive IDs (`rect frontend 100,100 ...`) for easy reference
 - **Edit & Delete** — Modify or remove elements by name, live
 - **Rename** — Rename cryptic auto-generated IDs to descriptive names
@@ -127,11 +128,34 @@ with `TRUST_PROXY`, the proxy hints are required or it will answer with redirect
 | Tool | Description |
 |------|-------------|
 | `read_me` | Element format cheat sheet — call once before drawing |
-| `draw_scene` | Compact DSL — one element per line, `mode=append` or `mode=replace` |
+| `draw_graph` | Node/edge diagram with **automatic layout** — no coordinates needed |
+| `draw_scene` | Compact DSL with absolute coordinates — for free-form placement |
 
-### Scene DSL
+### Graph DSL (recommended)
 
-Draw multiple elements in a single call with minimal tokens. **Always give elements descriptive IDs** — this makes updating and deleting easy:
+For anything made of boxes and arrows, describe the structure and let the layout engine place it.
+Boxes are sized to their labels, arrows stay out of unrelated boxes, and edge labels get their own
+space — the failure modes you get from asking a model to invent pixel coordinates.
+
+```
+direction LR
+title 'Event Processing'
+node ingest 'Event Ingestion Gateway' color=blue fill=blue
+node queue 'Kafka' color=purple fill=purple
+node worker 'Stream Worker' color=green fill=green
+node dlq 'Dead Letter Queue' color=red fill=red
+edge ingest -> queue 'publish'
+edge queue -> worker 'consume'
+edge queue -> dlq 'on failure' color=red
+```
+
+**Directions:** `LR`, `TB` (default), `RL`, `BT` · **Shapes:** `rect`, `circle`, `diamond` ·
+Long labels wrap automatically.
+
+### Scene DSL (manual placement)
+
+For annotations, legends and free-form sketches, where you want to decide where things go. Takes
+absolute coordinates. **Always give elements descriptive IDs** — this makes updating and deleting easy:
 
 ```
 # Comments start with #
@@ -181,7 +205,7 @@ Requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](
 
 | Tool | Description |
 |------|-------------|
-| `export_png` | Render a board to a PNG screenshot (headless Chromium via Playwright) |
+| `export_png` | Render a board to PNG via Excalidraw's own export — framed on the drawing, 2x by default |
 
 ## Environment Variables
 
