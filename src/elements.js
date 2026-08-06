@@ -156,7 +156,9 @@ export function parseDSL(dsl) {
           const detailLines = detailsRaw.replace(/(?<! )\|(?! )/g, "\n");
           fullLabel = labelText + "\n" + detailLines;
         }
-        shape.label = { text: fullLabel, fontSize: Math.min(fontSize, 16) };
+        // Dark text: a label in the stroke colour sits on a pastel fill of the
+        // same hue and is hard to read.
+        shape.label = { text: fullLabel, fontSize: Math.min(fontSize, 16), strokeColor: "#1e1e1e" };
         elements.push(shape);
       } else {
         elements.push(shape);

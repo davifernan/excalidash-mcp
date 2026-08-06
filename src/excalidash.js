@@ -238,6 +238,15 @@ export class ExcaliDashProvider {
     });
   }
 
+  /** Close the Socket.IO connection so the process can exit. */
+  disconnect() {
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
+      this.joinedRooms.clear();
+    }
+  }
+
   async pushLive(drawingId, elements, elementOrder) {
     const sock = await this.#getSocket();
     sock.emit("element-update", { drawingId, elements, elementOrder, userId: "excalidraw-mcp" });
