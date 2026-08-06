@@ -7,8 +7,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
 import { parseDSL, resolveColor, resolveFill } from "./elements.js";
+import { parseGraphDSL, layoutGraph } from "./layout.js";
 import { ExcaliDashProvider } from "./excalidash.js";
-import { convertElements } from "./converter.js";
+import { convertElements, closeConverter, renderPng } from "./converter.js";
+import { writeFile } from "node:fs/promises";
 
 const provider = new ExcaliDashProvider();
 
@@ -107,13 +109,14 @@ function zOrderConverted(elements) {
 // ============================================================
 // Core: push elements live + persist
 // ============================================================
-async function pushElements(boardId, newElements, mode = "append") {
+async function pushElements(boardId, newElements, mode = "append", opts = {}) {
   await provider.joinRoom(boardId);
 
   let convertedNew = newElements.length > 0 ? await convert(newElements) : newElements;
 
-  // Z-order AFTER conversion: arrows behind everything, shapes in middle, text on top
-  if (convertedNew.length > 0) {
+  // Z-order AFTER conversion: arrows behind everything, shapes in middle, text on top.
+  // Auto-laid-out graphs already carry a deliberate order — don't reshuffle them.
+  if (convertedNew.length > 0 && !opts.preLaidOut) {
     convertedNew = zOrderConverted(convertedNew);
   }
 
@@ -166,6 +169,26 @@ const server = new McpServer({ name: "excalidash-mcp", version: "2.0.0" });
 // read_me — Element format cheat sheet
 // ============================================================
 const CHEAT_SHEET = `# ExcaliDash Drawing Guide
+
+## Which tool?
+
+**draw_graph — use this for anything made of boxes and arrows.** Architectures, flows, pipelines,
+state machines, org charts. You describe only the structure; the layout engine positions everything,
+sizes boxes to their labels, keeps arrows out of unrelated boxes and reserves room for edge labels.
+
+\`\`\`
+direction LR                      # LR, TB (default), RL, BT
+title 'Request Pipeline'
+node client 'Client' color=blue fill=blue
+node api 'Backend Service' color=green fill=green
+node cache 'Cache hit?' shape=diamond color=orange fill=orange
+edge client -> api 'HTTPS'
+edge api -> cache
+\`\`\`
+
+**draw_scene — use this when you need control over placement**: annotations, legends, free-form
+sketches, or anything that isn't a graph. It takes absolute coordinates, so you own the layout —
+including making sure nothing overlaps. The rest of this guide covers draw_scene.
 
 ## Named Elements (wichtig!)
 Every element SHOULD get a short, descriptive ID right after the type keyword.
@@ -331,6 +354,42 @@ IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
+server.registerTool("draw_graph", {
+  description: `Draw a node/edge diagram with automatic layout. Prefer this over draw_scene for
+architectures, flows, pipelines and any boxes-and-arrows diagram — you describe the structure and
+the layout engine places everything, so boxes never overlap and arrows don't cut through them.
+
+Format (no coordinates):
+  direction LR            # LR, TB (default), RL, BT
+  title 'Request Pipeline'
+  node client 'Client' color=blue fill=blue
+  node api 'Backend Service' shape=diamond color=green fill=green
+  edge client -> api 'HTTPS'
+
+Colors: blue, green, orange, purple, red, yellow, teal, pink, gray. Shapes: rect (default), circle,
+diamond. Long labels wrap automatically and boxes are sized to fit.`,
+  inputSchema: z.object({
+    board_id: z.string(),
+    graph: z.string().describe("Graph DSL — node/edge lines, no coordinates"),
+    mode: z.enum(["append", "replace"]).optional().describe("Default: replace"),
+  }),
+}, async ({ board_id, graph, mode }) => {
+  try {
+    const parsed = parseGraphDSL(graph);
+    if (!parsed.nodes.length) {
+      return { content: [{ type: "text", text: "No nodes found. Use: node <id> 'Label'" }], isError: true };
+    }
+    const unknown = parsed.edges.filter(e =>
+      !parsed.nodes.some(n => n.id === e.from) || !parsed.nodes.some(n => n.id === e.to));
+    const elements = layoutGraph(parsed);
+    const r = await pushElements(board_id, elements, mode || "replace", { preLaidOut: true });
+    const warn = unknown.length
+      ? `\nSkipped ${unknown.length} edge(s) referencing unknown nodes: ${unknown.map(e => `${e.from}->${e.to}`).join(", ")}`
+      : "";
+    return { content: [{ type: "text", text: `Drew ${parsed.nodes.length} nodes, ${parsed.edges.length - unknown.length} edges (${parsed.direction}). ${r.url}${warn}` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
 // ============================================================
 // Edit / Delete
 // ============================================================
@@ -450,6 +509,11 @@ server.registerTool("delete_elements", {
     const existing = await provider.getDrawing(board_id);
     if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
     const deleteSet = new Set(element_ids);
+    // A shape's label is a separate element bound to it. Deleting only the shape
+    // leaves the label floating on the canvas.
+    for (const el of existing.elements || []) {
+      if (el.containerId && deleteSet.has(el.containerId)) deleteSet.add(el.id);
+    }
     const now = Date.now();
     const els = (existing.elements || []).map(e =>
       deleteSet.has(e.id)
@@ -475,7 +539,7 @@ async function getBrowser() {
 }
 
 server.registerTool("export_png", {
-  description: "Export a board as PNG screenshot.",
+  description: "Export a board as a PNG screenshot. The view is zoomed to fit the drawing, so the image is framed on the content rather than the canvas.",
   inputSchema: z.object({
     board_id: z.string().optional(),
     url: z.string().optional(),
@@ -483,29 +547,107 @@ server.registerTool("export_png", {
     width: z.number().optional(),
     height: z.number().optional(),
     wait: z.number().optional(),
+    fit: z.boolean().optional().describe("Crop to the drawing (default true; only used when passing a raw url)"),
+    scale: z.number().optional().describe("Pixel density for the export, default 2"),
   }),
-}, async ({ board_id, url, output, width, height, wait }) => {
+}, async ({ board_id, url, output, width, height, wait, fit, scale }) => {
   try {
     const targetUrl = url || (board_id ? provider.getUrl(board_id) : null);
     if (!targetUrl) return { content: [{ type: "text", text: "Provide board_id or url" }], isError: true };
     const outPath = output || `/tmp/excalidash-export-${Date.now()}.png`;
+
+    // Preferred path: render the board's elements with Excalidraw's own export.
+    // Always frames the whole drawing, and skips loading the editor entirely.
+    if (board_id && !url) {
+      const drawing = await provider.getDrawing(board_id);
+      if (!drawing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
+      const active = (drawing.elements || []).filter(e => !e.isDeleted);
+      if (!active.length) return { content: [{ type: "text", text: "Board is empty — nothing to export." }], isError: true };
+      const dataUrl = await renderPng(active, { scale: scale || 2 });
+      await writeFile(outPath, Buffer.from(dataUrl.split(",")[1], "base64"));
+      return { content: [{ type: "text", text: `Screenshot saved: ${outPath} (${active.length} elements)` }] };
+    }
+
     const browser = await getBrowser();
     const page = await browser.newPage({ viewport: { width: width || 1920, height: height || 1080 } });
     if (board_id && !url) {
-      await page.goto(provider.publicUrl + "/login", { waitUntil: "networkidle", timeout: 15000 });
+      // networkidle never settles here: the app holds a Socket.IO connection open.
+      await page.goto(provider.publicUrl + "/login", { waitUntil: "domcontentloaded", timeout: 15000 });
       await page.fill('input[type="email"]', provider.email).catch(() => {});
       await page.fill('input[type="password"]', provider.password).catch(() => {});
       await page.click('button[type="submit"]').catch(() => {});
-      await page.waitForTimeout(2000);
+      await page.waitForURL(u => !u.pathname.startsWith("/login"), { timeout: 15000 }).catch(() => {});
     }
-    await page.goto(targetUrl, { waitUntil: "networkidle", timeout: 15000 });
-    await page.waitForTimeout(wait || 3000);
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
+    await page.waitForSelector("canvas", { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(wait || 2500);
     await page.evaluate(() => {
       document.querySelectorAll('[class*="Island"], .layer-ui__wrapper, [class*="header"], .main-menu-trigger').forEach(el => el.style.display = "none");
     }).catch(() => {});
-    await page.screenshot({ path: outPath });
+    // Frame the drawing instead of shipping a mostly-empty canvas. Excalidraw's
+    // "zoom to fit" shortcut doesn't reach the editor here, so measure the drawn
+    // pixels directly and crop to them.
+    let clip = null, clipped = false;
+    if (fit !== false) {
+      clip = await page.evaluate((pad) => {
+        const canvas = document.querySelector("canvas.excalidraw__canvas.static") ||
+                       document.querySelector("canvas.excalidraw__canvas") ||
+                       document.querySelector("canvas");
+        if (!canvas) return null;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return null;
+        const { width: cw, height: ch } = canvas;
+        const { data } = ctx.getImageData(0, 0, cw, ch);
+
+        // The background is a flat colour; anything differing from the corner
+        // pixel is drawing.
+        const bg = [data[0], data[1], data[2]];
+        const differs = (i) =>
+          data[i + 3] > 8 &&
+          (Math.abs(data[i] - bg[0]) > 12 ||
+           Math.abs(data[i + 1] - bg[1]) > 12 ||
+           Math.abs(data[i + 2] - bg[2]) > 12);
+
+        let minX = cw, minY = ch, maxX = -1, maxY = -1;
+        for (let y = 0; y < ch; y++) {
+          for (let x = 0; x < cw; x++) {
+            if (differs((y * cw + x) * 4)) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < 0) return null;
+
+        // The canvas is sized in device pixels; the screenshot clip is in CSS pixels.
+        const scale = cw / (canvas.getBoundingClientRect().width || cw);
+        const touchesEdge = minX <= 1 || minY <= 1 || maxX >= cw - 2 || maxY >= ch - 2;
+        return {
+          x: Math.max(0, minX / scale - pad),
+          y: Math.max(0, minY / scale - pad),
+          width: (maxX - minX) / scale + pad * 2,
+          height: (maxY - minY) / scale + pad * 2,
+          touchesEdge,
+        };
+      }, 40).catch(() => null);
+    }
+
+    if (clip) {
+      const { touchesEdge, ...box } = clip;
+      box.width = Math.min(box.width, (width || 1920) - box.x);
+      box.height = Math.min(box.height, (height || 1080) - box.y);
+      await page.screenshot({ path: outPath, clip: box });
+      clipped = !touchesEdge;
+    } else {
+      await page.screenshot({ path: outPath });
+    }
     await page.close();
-    return { content: [{ type: "text", text: `Screenshot saved: ${outPath}` }] };
+    const note = clip && !clipped
+      ? " (drawing reaches the viewport edge — pass a larger width/height to capture all of it)"
+      : "";
+    return { content: [{ type: "text", text: `Screenshot saved: ${outPath}${note}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -544,5 +686,31 @@ server.registerTool("restore_version", {
 });
 
 // ============================================================
+// Shutdown
+//
+// Both the screenshot browser and the converter browser are long-lived by
+// design, and Playwright's Chromium keeps the event loop alive. Without this,
+// the server outlives its client: every MCP session leaves a node process and
+// its Chromium children running forever.
+// ============================================================
+let _shuttingDown = false;
+async function shutdown(code = 0) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  await Promise.allSettled([
+    _browser?.close(),
+    closeConverter(),
+    provider.disconnect(),
+  ]);
+  process.exit(code);
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => shutdown(0));
+}
+// The client going away closes stdin — that is the normal end of an MCP session.
+process.stdin.on("close", () => shutdown(0));
+process.stdin.on("end", () => shutdown(0));
+
 async function main() { await server.connect(new StdioServerTransport()); }
 main().catch((e) => { console.error(e); process.exit(1); });
