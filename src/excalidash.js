@@ -13,8 +13,10 @@ import { io } from "socket.io-client";
 
 export class ExcaliDashProvider {
   constructor(opts = {}) {
-    this.backendUrl = opts.backendUrl || process.env.EXCALIDASH_BACKEND_URL || "http://127.0.0.1:6768";
-    this.publicUrl = opts.publicUrl || process.env.EXCALIDASH_URL || "http://localhost:6767";
+    // Trailing slashes would produce "//csrf-token" once a path is appended.
+    const rawBackend = opts.backendUrl || process.env.EXCALIDASH_BACKEND_URL || "http://127.0.0.1:6768";
+    this.backendUrl = rawBackend.replace(/\/+$/, "");
+    this.publicUrl = (opts.publicUrl || process.env.EXCALIDASH_URL || "http://localhost:6767").replace(/\/+$/, "");
     this.email = opts.email || process.env.EXCALIDASH_EMAIL || "";
     this.password = opts.password || process.env.EXCALIDASH_PASSWORD || "";
 
@@ -30,9 +32,42 @@ export class ExcaliDashProvider {
     this.authCookies = [];
     this.socket = null;
     this.joinedRooms = new Set();
+
+    // Socket.IO must be given an origin, never a URL with a path: io() would read
+    // the path as a namespace. When the backend is reached through a prefix
+    // (EXCALIDASH_BACKEND_URL=https://draw.example.com/api), that prefix belongs
+    // in the engine.io path instead.
+    const parsed = new URL(this.backendUrl);
+    this.socketOrigin = parsed.origin;
+    this.socketPath = `${parsed.pathname.replace(/\/+$/, "")}/socket.io/`;
   }
 
   getUrl(drawingId) { return `${this.publicUrl}/editor/${drawingId}`; }
+
+  /**
+   * Parse a backend response as JSON, with a useful error when it isn't.
+   *
+   * A misconfigured reverse proxy serves the frontend SPA (200 + index.html)
+   * for backend paths instead of forwarding them, so `res.json()` fails with a
+   * bare "Unexpected token '<'". Name the actual cause instead.
+   */
+  async #json(res, path) {
+    const body = await res.text();
+    try {
+      return JSON.parse(body);
+    } catch {
+      const looksLikeHtml = /^\s*<(!doctype|html)/i.test(body);
+      if (looksLikeHtml) {
+        throw new Error(
+          `Expected JSON from ${this.backendUrl}${path} but got HTML — that URL is being answered ` +
+          `by the ExcaliDash frontend, not the backend. Set EXCALIDASH_BACKEND_URL to your ` +
+          `instance's /api path (e.g. https://draw.example.com/api), which the frontend proxies ` +
+          `to the backend. Verify with: curl -sS <your-url>/health`
+        );
+      }
+      throw new Error(`Invalid JSON from ${this.backendUrl}${path} (HTTP ${res.status}): ${body.slice(0, 120)}`);
+    }
+  }
 
   // --- Auth ---
   #getCookieHeader() {
@@ -49,7 +84,7 @@ export class ExcaliDashProvider {
     const res = await fetch(`${this.backendUrl}/csrf-token`, {
       headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
     });
-    const data = await res.json();
+    const data = await this.#json(res, "/csrf-token");
     this.csrfToken = data.token;
     this.authCookies.push(...(res.headers.getSetCookie?.() || []));
   }
@@ -58,7 +93,7 @@ export class ExcaliDashProvider {
     if (this.authToken) { await this.#refreshCsrf(); return; }
 
     const csrfRes = await fetch(`${this.backendUrl}/csrf-token`, { headers: this.proxyHeaders });
-    const csrfData = await csrfRes.json();
+    const csrfData = await this.#json(csrfRes, "/csrf-token");
     this.csrfToken = csrfData.token;
     this.authCookies = csrfRes.headers.getSetCookie?.() || [];
 
@@ -73,7 +108,16 @@ export class ExcaliDashProvider {
     this.authCookies.push(...loginCookies);
     const ac = loginCookies.find(c => c.startsWith("excalidash-access-token="));
     if (ac) this.authToken = ac.split("=")[1].split(";")[0];
-    if (!this.authToken) throw new Error("No auth token received");
+    if (!this.authToken) {
+      // A proxy serving the SPA answers /auth/login with 200 + HTML and no cookies
+      if (/text\/html/i.test(loginRes.headers.get("content-type") || "")) {
+        throw new Error(
+          `Login to ${this.backendUrl}/auth/login returned HTML instead of an auth cookie — ` +
+          `EXCALIDASH_BACKEND_URL points at the frontend. Use your instance's /api path instead.`
+        );
+      }
+      throw new Error("No auth token received");
+    }
     await this.#refreshCsrf();
   }
 
@@ -98,7 +142,7 @@ export class ExcaliDashProvider {
       });
     }
     if (!res.ok) return null;
-    return res.json();
+    return this.#json(res, path);
   }
 
   async #post(path, body) {
@@ -117,7 +161,7 @@ export class ExcaliDashProvider {
       });
     }
     if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
-    return res.json();
+    return this.#json(res, path);
   }
 
   async #put(path, body) {
@@ -136,14 +180,15 @@ export class ExcaliDashProvider {
       });
     }
     if (!res.ok) throw new Error(`PUT ${path}: ${res.status}`);
-    return res.json();
+    return this.#json(res, path);
   }
 
   // --- Socket.IO ---
   async #getSocket() {
     if (this.socket?.connected) return this.socket;
     await this.#login();
-    this.socket = io(this.backendUrl, {
+    this.socket = io(this.socketOrigin, {
+      path: this.socketPath,
       auth: { token: this.authToken },
       transports: ["websocket", "polling"],
       extraHeaders: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },

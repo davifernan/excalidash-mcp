@@ -7,13 +7,11 @@ https://github.com/user-attachments/assets/placeholder-demo.mp4
 ## Features
 
 - **Live updates** — Elements appear instantly in open browsers, no refresh needed
-- **High-level tools** — `add_text`, `add_shape`, `add_arrow` with minimal tokens
 - **Scene DSL** — Draw complex diagrams with a compact one-line-per-element syntax
 - **Named Elements** — Give elements descriptive IDs (`rect frontend 100,100 ...`) for easy reference
 - **Edit & Delete** — Modify or remove elements by name, live
 - **Rename** — Rename cryptic auto-generated IDs to descriptive names
 - **Version History** — Browse snapshots, restore previous versions (requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138))
-- **Library** — Search and place icons/templates from your ExcaliDash library
 - **Token-efficient** — ~85% fewer tokens compared to raw Excalidraw JSON
 
 ## Prerequisites
@@ -31,61 +29,21 @@ cp .env.example .env  # configure JWT_SECRET, CSRF_SECRET, etc.
 docker compose up -d
 ```
 
-### 2. Configure Nginx (important!)
+### 2. No proxy config needed — use `/api`
 
-The default ExcaliDash frontend Nginx config does **not** proxy `/api/` and `/socket.io/` to the backend. You need to add these proxy rules for the MCP adapter (and live collaboration) to work.
+**You do not need to write or mount an Nginx config.** The ExcaliDash frontend image already
+proxies both routes this adapter needs, out of the box:
 
-Create a custom `nginx.conf` and mount it into the frontend container:
+- `/api/` → the backend (the `/api` prefix is stripped, so `/api/drawings` reaches `/drawings`)
+- `/socket.io/` → the backend, with WebSocket upgrade headers
 
-```nginx
-server {
-    listen 80;
-    server_name localhost;
+So point `EXCALIDASH_BACKEND_URL` at `https://your-domain/api` and everything works through your
+existing setup — no extra ports, no custom Nginx, no changes to your compose file.
 
-    location / {
-        root /usr/share/nginx/html;
-        index index.html;
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API proxy
-    location /api/ {
-        proxy_pass http://backend:8000/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Backend routes (auth, drawings, etc.)
-    location ~ ^/(auth|csrf-token|drawings|health|collections|admin) {
-        proxy_pass http://backend:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # Socket.IO (live collaboration)
-    location /socket.io/ {
-        proxy_pass http://backend:8000/socket.io/;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400;
-    }
-}
-```
-
-Mount it in your `docker-compose.yml`:
-
-```yaml
-frontend:
-  image: zimengxiong/excalidash-frontend:latest
-  volumes:
-    - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
-```
+> **Note:** earlier versions of this README told you to mount a custom `nginx.conf` at
+> `/etc/nginx/conf.d/default.conf`. That advice was wrong. The frontend image renders its config to
+> `/etc/nginx/nginx.conf` at startup and never includes `conf.d/`, so the mount silently does
+> nothing. If you followed it, you can drop the mount.
 
 ### 3. Create an agent user
 
@@ -93,15 +51,20 @@ Create a dedicated user for the MCP adapter in ExcaliDash. This keeps agent acti
 
 You can create a user via the ExcaliDash UI or API.
 
-### 4. (Optional) Expose backend port
+### 4. (Optional) Expose the backend port
 
-If the MCP adapter runs on the same machine as ExcaliDash, expose the backend port for direct access (faster than going through Nginx):
+Only relevant if the MCP adapter runs **on the same machine** as ExcaliDash and you want to skip the
+Nginx hop:
 
 ```yaml
 backend:
   ports:
     - "127.0.0.1:6768:8000"
 ```
+
+Then use `EXCALIDASH_BACKEND_URL=http://127.0.0.1:6768` instead of the `/api` URL. If the backend
+runs with `TRUST_PROXY`, also set `EXCALIDASH_PROXY_PROTO` and `EXCALIDASH_PROXY_HOST` — otherwise
+it answers with a 302 to your public URL.
 
 ## Installation
 
@@ -113,7 +76,12 @@ npm install
 
 ## Configuration
 
-Add to your MCP client config (e.g. `~/.mcp.json` for Claude Code):
+Add to your MCP client config (e.g. `~/.mcp.json` for Claude Code).
+
+### Recommended — MCP client anywhere, ExcaliDash behind a domain
+
+This is the usual case: ExcaliDash runs on a server, your MCP client runs on your laptop. Both URLs
+are your public domain; the backend is reached through the frontend's built-in `/api` proxy.
 
 ```json
 {
@@ -122,8 +90,8 @@ Add to your MCP client config (e.g. `~/.mcp.json` for Claude Code):
       "command": "node",
       "args": ["/path/to/excalidash-mcp/src/index.js"],
       "env": {
-        "EXCALIDASH_BACKEND_URL": "http://127.0.0.1:6768",
-        "EXCALIDASH_URL": "https://your-excalidash.example.com",
+        "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
+        "EXCALIDASH_URL": "https://draw.example.com",
         "EXCALIDASH_EMAIL": "agent@example.com",
         "EXCALIDASH_PASSWORD": "your-agent-password"
       }
@@ -132,15 +100,22 @@ Add to your MCP client config (e.g. `~/.mcp.json` for Claude Code):
 }
 ```
 
-### Behind a reverse proxy?
+Nothing else is required — no exposed backend port and no custom proxy rules.
 
-If your ExcaliDash backend has `TRUST_PROXY=true` (common when behind Nginx/Cloudflare), add these to prevent redirect loops:
+### Same-host — MCP client on the ExcaliDash machine
+
+Slightly lower latency, but needs the backend port exposed (see step 4 above). If the backend runs
+with `TRUST_PROXY`, the proxy hints are required or it will answer with redirects:
 
 ```json
 {
   "env": {
+    "EXCALIDASH_BACKEND_URL": "http://127.0.0.1:6768",
+    "EXCALIDASH_URL": "https://draw.example.com",
+    "EXCALIDASH_EMAIL": "agent@example.com",
+    "EXCALIDASH_PASSWORD": "your-agent-password",
     "EXCALIDASH_PROXY_PROTO": "https",
-    "EXCALIDASH_PROXY_HOST": "your-excalidash.example.com"
+    "EXCALIDASH_PROXY_HOST": "draw.example.com"
   }
 }
 ```
@@ -151,10 +126,8 @@ If your ExcaliDash backend has `TRUST_PROXY=true` (common when behind Nginx/Clou
 
 | Tool | Description |
 |------|-------------|
-| `add_text` | Add text with position, color, size, font |
-| `add_shape` | Add rectangle/ellipse/diamond with optional label |
-| `add_arrow` | Arrow with head styles (arrow/bar/dot/triangle/none), line styles (solid/dashed/dotted) |
-| `draw_scene` | Compact DSL — one element per line |
+| `read_me` | Element format cheat sheet — call once before drawing |
+| `draw_scene` | Compact DSL — one element per line, `mode=append` or `mode=replace` |
 
 ### Scene DSL
 
@@ -204,30 +177,58 @@ Requires [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) with [PR #138](
 | `board_history` | List version snapshots (ID + timestamp) |
 | `restore_version` | Restore a board to a previous snapshot (reversible) |
 
-### Library
+### Export
 
 | Tool | Description |
 |------|-------------|
-| `get_library` | Search available icons/templates by name |
-| `add_from_library` | Place a library item on the board |
+| `export_png` | Render a board to a PNG screenshot (headless Chromium via Playwright) |
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `EXCALIDASH_BACKEND_URL` | Yes | Backend API URL (e.g. `http://127.0.0.1:6768`) |
-| `EXCALIDASH_URL` | Yes | Public frontend URL (e.g. `https://draw.example.com`) |
+| `EXCALIDASH_BACKEND_URL` | Yes | Where the backend is reachable — `https://draw.example.com/api` (through the frontend proxy) or `http://127.0.0.1:6768` (direct). A path prefix like `/api` is supported and is applied to Socket.IO too. |
+| `EXCALIDASH_URL` | Yes | Public frontend URL, used to build board links (e.g. `https://draw.example.com`) |
 | `EXCALIDASH_EMAIL` | Yes | Agent user email |
 | `EXCALIDASH_PASSWORD` | Yes | Agent user password |
-| `EXCALIDASH_PROXY_PROTO` | No | Set to `https` if behind reverse proxy with `TRUST_PROXY=true` |
-| `EXCALIDASH_PROXY_HOST` | No | Hostname for proxy `Host` header |
+| `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly, to avoid redirects |
+| `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
+
+## Troubleshooting
+
+**`Expected JSON from … but got HTML`** — the URL in `EXCALIDASH_BACKEND_URL` is being answered by
+the frontend instead of the backend. Almost always a missing `/api` suffix. Verify with:
+
+```bash
+curl -sS https://draw.example.com/api/health    # → {"status":"ok"}
+curl -sS https://draw.example.com/health        # → HTML, this is expected
+```
+
+**Login fails with a 302 / redirect** — you are pointing at the backend directly while it runs with
+`TRUST_PROXY`. Add `EXCALIDASH_PROXY_PROTO=https` and `EXCALIDASH_PROXY_HOST=your-domain`, or switch
+to the `/api` URL.
+
+**REST works but nothing appears live** — Socket.IO isn't getting through. Your proxy must forward
+`/socket.io/` with the `Upgrade`/`Connection` headers. The stock frontend image does this already;
+custom proxies in front of it (Cloudflare, Traefik, another Nginx) need WebSockets enabled.
+
+### Running on a PaaS (Coolify, Dokku, …)
+
+The `/api` setup above needs no platform-specific work. If your platform puts its own proxy in front
+of ExcaliDash, the things worth knowing are that the platform usually wants to own Docker networking
+(a custom `networks:` block can isolate your containers from the platform proxy and produce a 504),
+and that Docker Compose interpolates `$` inside inline `configs:` blocks.
+
+[@dadof3bytes](https://github.com/dadof3bytes) wrote up a detailed Coolify field guide in
+[issue #1](https://github.com/davifernan/excalidash-mcp/issues/1) — worth reading if you deploy
+there.
 
 ## How it works
 
 ```
 Claude / AI Agent
        │
-       │ MCP tool calls (add_text, draw_scene, etc.)
+       │ MCP tool calls (draw_scene, update_element, etc.)
        ▼
 ┌─────────────────┐
 │  excalidash-mcp │  ← enriches elements, calculates text dimensions
