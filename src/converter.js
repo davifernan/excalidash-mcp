@@ -44,3 +44,32 @@ export async function convertElements(simplifiedElements) {
 
   return converted;
 }
+
+/**
+ * Render elements to a PNG data URL using Excalidraw's own export.
+ *
+ * Screenshotting the editor means fighting its viewport: the drawing sits
+ * wherever the canvas happens to be scrolled, and anything outside the window
+ * is simply missing. Exporting the elements directly always frames the whole
+ * drawing, needs no login, and is far faster.
+ */
+export async function renderPng(elements, { scale = 2, padding = 32, background = true } = {}) {
+  const page = await getPage();
+  return page.evaluate(async ({ elements, scale, padding, background }) => {
+    const canvas = await window.exportToCanvas({
+      elements,
+      appState: { exportBackground: background, viewBackgroundColor: "#ffffff", exportPadding: padding },
+      files: {},
+      getDimensions: (w, h) => ({ width: w * scale, height: h * scale, scale }),
+    });
+    return canvas.toDataURL("image/png");
+  }, { elements, scale, padding, background });
+}
+
+/** Release the headless browser held for conversions. */
+export async function closeConverter() {
+  const browser = _browser;
+  _page = null;
+  _browser = null;
+  if (browser?.isConnected()) await browser.close().catch(() => {});
+}
