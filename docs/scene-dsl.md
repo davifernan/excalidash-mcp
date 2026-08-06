@@ -1,7 +1,7 @@
-# Scene DSL — manual placement
+# Scene DSL: manual placement
 
 `draw_scene` places elements at absolute coordinates. Use it for annotations, legends, callouts and
-free-form sketches — anything where you want to decide exactly where things go.
+free-form sketches, anything where you want to decide exactly where things go.
 
 For diagrams made of boxes and arrows, prefer `draw_graph`: it takes structure instead of
 coordinates and runs a layout engine, so you don't have to keep boxes from colliding by hand.
@@ -28,7 +28,7 @@ One element per line:
 <type> <id> <x>,<y> [<width>x<height>] [key=value ...] ['Label'] ['Details']
 ```
 
-**Always give elements a descriptive id** — `update_element`, `rename_element` and
+**Always give elements a descriptive id.** `update_element`, `rename_element` and
 `delete_elements` address elements by it, and `read_board` lists them. Without one, elements get
 generated ids like `el-1744123456789-0`.
 
@@ -43,7 +43,7 @@ generated ids like `el-1744123456789-0`.
 | Key | Values |
 |-----|--------|
 | `color` | `red` `blue` `green` `orange` `purple` `pink` `yellow` `gray` `black`, or a hex code |
-| `fill` | same set — pastel background matching the stroke colour |
+| `fill` | same set, pastel background matching the stroke colour |
 | `size` | font size (text elements and labels) |
 | `style` | `solid` `dashed` `dotted` (arrows and lines) |
 | `start` / `end` | `arrow` `bar` `dot` `triangle` `none` (arrowheads) |
@@ -52,7 +52,7 @@ generated ids like `el-1744123456789-0`.
 ## Bound arrows
 
 Give an arrow `from=` and `to=` with element ids and the endpoints are computed from the shape
-edges — the coordinates are then ignored, so `0,0 -> 0,0` is the convention:
+edges. The coordinates are then ignored, so `0,0 -> 0,0` is the convention:
 
 ```
 rect a 100,100 180x80 color=blue fill=blue 'Service A'
