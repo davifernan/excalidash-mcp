@@ -1,8 +1,9 @@
 # excalidash-mcp
 
-**Let Claude draw on your whiteboard.** An MCP server that turns a description of a diagram into real
-Excalidraw elements on your self-hosted [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) —
-appearing live in any browser that has the board open, no refresh.
+**Let your AI coding agent draw on your whiteboard.** Works with Claude Code, Cursor, Codex or any
+other tool that speaks MCP. It turns a description of a diagram into real Excalidraw elements on your
+self-hosted [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash), and they appear live in every
+browser that has the board open. No refresh needed.
 
 ![Order processing diagram drawn by the MCP server](assets/02-order-processing.png)
 
@@ -17,8 +18,8 @@ appearing live in any browser that has the board open, no refresh.
 Ask a language model for a diagram and it has to invent pixel coordinates. It is bad at that, and the
 result shows: arrows cut through boxes, labels hide underneath them, text overflows its container.
 
-So don't ask it to. Describe the **structure** — nodes and edges — and let a layout engine do the
-geometry. Same graph, both ways:
+So don't ask it to. Describe the **structure**, meaning nodes and edges, and let a layout engine do
+the geometry. Same graph, both ways:
 
 | ❌ Model picks coordinates | ✅ Model picks structure |
 |---|---|
@@ -34,7 +35,8 @@ git clone https://github.com/davifernan/excalidash-mcp.git
 cd excalidash-mcp && npm install
 ```
 
-Add it to your MCP client (`~/.mcp.json` for Claude Code):
+Add it to your MCP client. This is `~/.mcp.json` for Claude Code; Cursor, Codex and the rest use the
+same shape in their own config file:
 
 ```json
 {
@@ -60,7 +62,7 @@ Add it to your MCP client (`~/.mcp.json` for Claude Code):
 
 ## Drawing
 
-Ask for a diagram in plain language — the agent writes the DSL. This is what it writes:
+Ask for a diagram in plain language and the agent writes the DSL. This is what it writes:
 
 ```
 direction LR
@@ -89,16 +91,16 @@ edge prod -> roll 'on error' color=red style=dashed
 Boxes are sized to fit their labels, long labels wrap, edge labels get their own space, and parallel
 edges fan apart instead of stacking. **Directions:** `LR`, `TB`, `RL`, `BT` · **Shapes:** `rect`,
 `circle`, `diamond` · **Colors:** `blue`, `green`, `orange`, `purple`, `red`, `yellow`, `teal`,
-`pink`, `gray` — or any hex code.
+`pink`, `gray`, or any hex code.
 
 For annotations, legends and free-form sketches there is a second DSL that takes absolute
-coordinates — see [docs/scene-dsl.md](docs/scene-dsl.md).
+coordinates. See [docs/scene-dsl.md](docs/scene-dsl.md).
 
 ## Tools
 
 | Tool | What it does |
 |------|--------------|
-| `draw_graph` | Node/edge diagram with automatic layout — **start here** |
+| `draw_graph` | Node/edge diagram with automatic layout. **Start here.** |
 | `draw_scene` | Place elements at absolute coordinates |
 | `read_me` | Format cheat sheet; the agent calls this once before drawing |
 | `list_boards` · `create_board` · `read_board` · `clear_board` | Board management |
@@ -106,7 +108,9 @@ coordinates — see [docs/scene-dsl.md](docs/scene-dsl.md).
 | `board_history` · `restore_version` | Browse and restore snapshots<sup>†</sup> |
 | `export_png` | Render a board to PNG, framed on the drawing |
 
-<sup>†</sup> Version history needs ExcaliDash with [PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138).
+<sup>†</sup> Version history needs the snapshot API from
+[PR #138](https://github.com/ZimengXiong/ExcaliDash/pull/138), merged into ExcaliDash in April 2026.
+Any current version has it.
 
 ## How it works
 
@@ -118,10 +122,10 @@ itself and exported with `export_png`.
 
 ## Docs
 
-- [Examples](docs/examples.md) — more diagrams, each with the DSL that produced it
-- [Setup](docs/setup.md) — ExcaliDash instance, the `/api` path, environment variables
-- [Scene DSL](docs/scene-dsl.md) — manual placement, element reference
-- [Troubleshooting](docs/troubleshooting.md) — HTML instead of JSON, redirects, missing live updates
+- [Examples](docs/examples.md): more diagrams, each with the DSL that produced it
+- [Setup](docs/setup.md): ExcaliDash instance, the `/api` path, environment variables
+- [Scene DSL](docs/scene-dsl.md): manual placement, element reference
+- [Troubleshooting](docs/troubleshooting.md): HTML instead of JSON, redirects, missing live updates
 
 ## License
 

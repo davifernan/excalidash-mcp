@@ -3,7 +3,7 @@
 Each diagram below is the exact output of the DSL shown with it, drawn by `draw_graph` and exported
 with `export_png`. Copy a block, change the labels, and you have your own.
 
-## Left to right — a service graph
+## Left to right: a service graph
 
 Good default for architectures and data flows. Branches read naturally when the flow moves sideways.
 
@@ -33,7 +33,7 @@ edge pay -> bus 'PaymentSettled'
 Note `pay -> bus` running back against the flow. Two edges between the same pair are bowed apart so
 their labels don't collide.
 
-## Decisions — diamonds and a failure path
+## Decisions: diamonds and a failure path
 
 ![Deploy pipeline](../assets/03-deploy-pipeline.png)
 
@@ -61,7 +61,7 @@ edge prod -> roll 'on error' color=red style=dashed
 
 `shape=diamond` for a decision, `style=dashed` plus `color=red` for the path you hope never runs.
 
-## Top to bottom — a protocol flow
+## Top to bottom: a protocol flow
 
 `direction TB` suits sequences and anything with back-and-forth between two participants.
 
@@ -88,13 +88,13 @@ edge token -> cli 'access token'
 edge cli -> api 'authorized calls'
 ```
 
-`show code` and `approve in browser` run between the same two boxes in opposite directions — they
-are placed at different points along the edge so both stay readable.
+`show code` and `approve in browser` run between the same two boxes in opposite directions, so they
+are placed at different points along the edge to keep both readable.
 
 ## Tips
 
 - **Give nodes short ids.** They are what you pass to `update_element` and `delete_elements` later.
 - **Leave edges unlabelled when the direction says enough.** Every label competes for space.
-- **Use `fill` for grouping**, not decoration — same colour for services of the same kind reads as
+- **Use `fill` for grouping**, not decoration. Same colour for services of the same kind reads as
   meaning.
 - **Long labels are fine.** They wrap, and the box grows to fit.
