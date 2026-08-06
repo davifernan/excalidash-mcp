@@ -118,6 +118,7 @@ itself and exported with `export_png`.
 
 ## Docs
 
+- [Examples](docs/examples.md) — more diagrams, each with the DSL that produced it
 - [Setup](docs/setup.md) — ExcaliDash instance, the `/api` path, environment variables
 - [Scene DSL](docs/scene-dsl.md) — manual placement, element reference
 - [Troubleshooting](docs/troubleshooting.md) — HTML instead of JSON, redirects, missing live updates
