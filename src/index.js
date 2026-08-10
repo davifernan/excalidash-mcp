@@ -9,6 +9,13 @@ import { z } from "zod/v4";
 import { parseDSL, resolveColor, resolveFill } from "./elements.js";
 import { parseGraphDSL, layoutGraph } from "./layout.js";
 import { ExcaliDashProvider } from "./excalidash.js";
+import {
+  ACCESS_LEVELS,
+  MIN_QUERY_LENGTH,
+  describeUser,
+  parseShareTarget,
+  pickRecipient,
+} from "./sharing.js";
 import { convertElements, closeConverter, renderPng } from "./converter.js";
 import { writeFile } from "node:fs/promises";
 
@@ -301,7 +308,7 @@ server.registerTool("create_board", {
 }, async ({ name }) => {
   try {
     const d = await provider.createDrawing(name, [], {}, {});
-    return { content: [{ type: "text", text: `Board "${name}"\nURL: ${provider.getUrl(d.id)}\nID: ${d.id}` }] };
+    return { content: [{ type: "text", text: `Board "${name}"\nURL: ${provider.getUrl(d.id)}\nID: ${d.id}\n${await autoShare(d.id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -330,6 +337,158 @@ server.registerTool("clear_board", {
     const r = await pushElements(board_id, [], "replace");
     return { content: [{ type: "text", text: `Cleared. ${r.url}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
+// ============================================================
+// Sharing
+//
+// The agent signs in as its own account — which is what this project's setup
+// guide recommends — so every board it creates belongs to that account and
+// nobody else can open it. Two paths hand a board back to a person: an explicit
+// tool call, and a standing EXCALIDASH_SHARE_WITH for the recipient who is the
+// same every time.
+//
+// Both go through applyShare, so there is one resolution rule, one permission
+// model, and one place for a bug about who gets access to live.
+// ============================================================
+const shareTarget = parseShareTarget(process.env.EXCALIDASH_SHARE_WITH);
+
+async function applyShare(boardId, recipient, access, knownUserId = null) {
+  const wanted = String(recipient ?? "").trim();
+  if (!wanted) return { status: "empty" };
+
+  // The instance hides the signed-in user from its own lookup, so without this
+  // the agent naming itself would come back as "no such user".
+  const me = await provider.whoAmI();
+  if (me && (wanted === me.id || wanted.toLowerCase() === String(me.email ?? "").toLowerCase())) {
+    return { status: "self", me };
+  }
+
+  try {
+    let user = null;
+    if (!knownUserId && wanted.length >= MIN_QUERY_LENGTH) {
+      const picked = pickRecipient(wanted, await provider.findUsers(boardId, wanted));
+      if (picked.status === "ambiguous") return { ...picked, query: wanted };
+      if (picked.status === "resolved") user = picked.user;
+    }
+
+    // The lookup searches name, username and address only, so a raw user id
+    // arrives here unresolved. Pass it through and let the instance reject it:
+    // that keeps ids working without this code having to guess what one is.
+    const granteeUserId = knownUserId ?? user?.id ?? wanted;
+    const who = user ? describeUser(user) : wanted;
+
+    if (access === "none") {
+      const { permissions } = await provider.getSharing(boardId);
+      const granted = permissions.find((p) => p.granteeUserId === granteeUserId);
+      if (!granted) return { status: "not-shared", who };
+      await provider.revokeAccess(boardId, granted.id);
+      return { status: "revoked", who };
+    }
+
+    const saved = await provider.grantAccess(boardId, granteeUserId, access);
+    return {
+      status: "granted",
+      who: saved?.granteeUser ? describeUser(saved.granteeUser) : who,
+      userId: saved?.granteeUserId ?? granteeUserId,
+      access,
+    };
+  } catch (err) {
+    // Both of these arrive as a bare 404 and mean very different things, which
+    // is why the response body is read. Say which one it was.
+    if (/User not found/i.test(err.message)) {
+      return { status: "unresolved", query: wanted, tooShort: wanted.length < MIN_QUERY_LENGTH };
+    }
+    if (/Drawing not found/i.test(err.message)) return { status: "not-owner" };
+    throw err;
+  }
+}
+
+function shareMessage(result, boardId) {
+  switch (result.status) {
+    case "granted":
+      return `Shared with ${result.who} (${result.access} access). It is now in their "Shared with me".\n${provider.getUrl(boardId)}`;
+    case "revoked":
+      return `Removed ${result.who}'s access to this board.`;
+    case "not-shared":
+      return `Nothing to do — this board was not shared with ${result.who}.`;
+    case "self":
+      return `"${result.me.email}" is the agent's own account, which already owns this board. Name the person it should be shared with instead.`;
+    case "ambiguous":
+      return [
+        result.candidates.length === 1
+          ? `Nothing was shared. "${result.query}" is not this account's exact name or address, and the instance matches on fragments, so this may well be somebody else.`
+          : `Nothing was shared. "${result.query}" matches several accounts, and picking one would risk giving the board to the wrong person.`,
+        `Confirm who is meant, then call again with their exact email address:`,
+        ...result.candidates.map((u) => `  - ${describeUser(u)}`),
+      ].join("\n");
+    case "unresolved":
+      return result.tooShort
+        ? `Nothing was shared. "${result.query}" is too short — the instance ignores lookups under ${MIN_QUERY_LENGTH} characters. Give the full email address.`
+        : `Nothing was shared. No account on this instance matches "${result.query}". Check the spelling, or ask them for the address they signed up with.`;
+    case "not-owner":
+      return `Nothing was shared. This board either does not exist or belongs to somebody else — only a board's owner can change who it is shared with.`;
+    case "empty":
+      return `Name a recipient: an email address, or a name as it appears on the instance.`;
+    default:
+      return `Unexpected result: ${result.status}`;
+  }
+}
+
+// The address in the config is resolved once and then remembered as an id. A
+// standing recipient has to keep working: without this, someone signing up
+// later with a name that contains the configured one would make the lookup
+// ambiguous, and boards would quietly stop being shared.
+let shareTargetUserId = null;
+
+/** Apply EXCALIDASH_SHARE_WITH to a freshly created board, if it is set. */
+async function autoShare(boardId) {
+  if (!shareTarget) {
+    return `Access: private to the agent's account. Use share_board to give someone else access.`;
+  }
+  try {
+    const result = await applyShare(
+      boardId,
+      shareTarget.recipient,
+      shareTarget.access,
+      shareTargetUserId,
+    );
+    if (result.status === "granted") {
+      shareTargetUserId ??= result.userId ?? null;
+      return `Access: shared with ${result.who} (${result.access}), from EXCALIDASH_SHARE_WITH.`;
+    }
+    // A board that exists but is private beats no board at all, so this never
+    // fails the creation it is attached to. Say so plainly instead.
+    return `Access: private — EXCALIDASH_SHARE_WITH ("${shareTarget.recipient}") did not apply. ${shareMessage(result, boardId)}`;
+  } catch (err) {
+    return `Access: private — EXCALIDASH_SHARE_WITH ("${shareTarget.recipient}") failed: ${err.message}`;
+  }
+}
+
+server.registerTool("share_board", {
+  description: `Give a person on your ExcaliDash instance access to a board, or take it away again.
+
+Boards this server creates belong to the agent's own account and nobody else can open them, so a
+finished drawing has to be shared before a human can see it. Call this once the board is ready.
+
+Pass an email address when you have one: names are matched loosely, and if a name could mean more
+than one account nothing is shared and you are asked which one. Use access "none" to revoke.`,
+  inputSchema: z.object({
+    board_id: z.string(),
+    with: z.string().describe("Email address of the recipient, or their name on the instance"),
+    access: z.enum(ACCESS_LEVELS).optional().describe("Default: edit. Use 'none' to revoke access"),
+  }),
+}, async ({ board_id, with: recipient, access }) => {
+  try {
+    const result = await applyShare(board_id, recipient, access || "edit");
+    const settled = result.status === "granted" || result.status === "revoked";
+    return {
+      content: [{ type: "text", text: shareMessage(result, board_id) }],
+      ...(settled ? {} : { isError: true }),
+    };
+  } catch (err) {
+    return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
+  }
 });
 
 // ============================================================

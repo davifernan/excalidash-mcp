@@ -40,6 +40,17 @@ curl -sS https://draw.example.com/health        # → HTML. This is expected.
 Create a dedicated ExcaliDash account for the adapter, through the UI or the API. Its actions then
 show up as a distinct collaborator on the board and stay separate from your own account.
 
+That separation has a consequence worth knowing before you hit it: **boards the agent creates belong
+to the agent's account**, and your own account cannot see them. The link the agent hands you will not
+open. Two ways round it:
+
+- Ask the agent to share the finished board: `share_board(board_id, with="you@example.com")`.
+- Or set `EXCALIDASH_SHARE_WITH` to your address, and every board it creates is shared with you from
+  the moment it exists.
+
+Both need the recipient to have an account on the same instance. See
+[Sharing](../README.md#sharing).
+
 ## 4. Optional: the same-host route
 
 If the MCP server runs on the same machine as ExcaliDash, you can skip the Nginx hop by exposing the
@@ -77,6 +88,7 @@ The two proxy hints are required here: a backend running with `TRUST_PROXY` answ
 | `EXCALIDASH_PASSWORD` | Yes | Agent user password |
 | `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly |
 | `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
+| `EXCALIDASH_SHARE_WITH` | No | Share every new board with this person: an email address or user id, optionally `:view` or `:edit` (default `view`, since the agent is still drawing on it) |
 
 ## Running on a PaaS (Coolify, Dokku, …)
 

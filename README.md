@@ -96,6 +96,31 @@ edges fan apart instead of stacking. **Directions:** `LR`, `TB`, `RL`, `BT` · *
 For annotations, legends and free-form sketches there is a second DSL that takes absolute
 coordinates. See [docs/scene-dsl.md](docs/scene-dsl.md).
 
+## Sharing
+
+The agent signs in as its own account, so the boards it draws on belong to that account and nobody
+else can open them. Ask it to share one when it's done:
+
+```
+share_board(board_id, with="you@example.com", access="edit")
+```
+
+The board then appears under **Shared with me** on your dashboard. `access="none"` takes it away
+again. Pass an email address: the instance matches on fragments, so anything that isn't an exact
+address or name is handed back for you to confirm rather than guessed at.
+
+If every board should reach you anyway, set a standing recipient:
+
+```json
+"EXCALIDASH_SHARE_WITH": "you@example.com"
+```
+
+Every board the agent creates is then shared with you the moment it exists, so you can watch it being
+drawn. This one shares **view** access, because the board is still being worked on: drawing rewrites
+the board's contents, and `draw_graph` replaces them outright, so anything you added would be gone on
+the next call. Append `:edit` if you want it anyway. A user id works in place of the address and
+skips the lookup entirely.
+
 ## Tools
 
 | Tool | What it does |
@@ -104,6 +129,7 @@ coordinates. See [docs/scene-dsl.md](docs/scene-dsl.md).
 | `draw_scene` | Place elements at absolute coordinates |
 | `read_me` | Format cheat sheet; the agent calls this once before drawing |
 | `list_boards` · `create_board` · `read_board` · `clear_board` | Board management |
+| `share_board` | Give a person access to a finished board, or take it away |
 | `update_element` · `delete_elements` · `rename_element` | Edit by name, live |
 | `board_history` · `restore_version` | Browse and restore snapshots<sup>†</sup> |
 | `export_png` | Render a board to PNG, framed on the drawing |
