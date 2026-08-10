@@ -106,18 +106,20 @@ share_board(board_id, with="you@example.com", access="edit")
 ```
 
 The board then appears under **Shared with me** on your dashboard. `access="none"` takes it away
-again. Pass an email address when you have one — a name is matched loosely, and when it could mean
-two people nothing is shared and the agent is asked which one you meant.
+again. Pass an email address: the instance matches on fragments, so anything that isn't an exact
+address or name is handed back for you to confirm rather than guessed at.
 
-If every board should reach you anyway, set a standing recipient and skip the asking:
+If every board should reach you anyway, set a standing recipient:
 
 ```json
 "EXCALIDASH_SHARE_WITH": "you@example.com"
 ```
 
 Every board the agent creates is then shared with you the moment it exists, so you can watch it being
-drawn. Append `:view` for read-only access. A user id works in place of the address and skips the
-lookup entirely.
+drawn. This one shares **view** access, because the board is still being worked on: drawing rewrites
+the board's contents, and `draw_graph` replaces them outright, so anything you added would be gone on
+the next call. Append `:edit` if you want it anyway. A user id works in place of the address and
+skips the lookup entirely.
 
 ## Tools
 

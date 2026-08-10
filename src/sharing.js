@@ -55,7 +55,10 @@ export const pickRecipient = (query, candidates) => {
   );
   if (byName.length === 1) return { status: "resolved", user: byName[0], how: "name" };
 
-  if (found.length === 1) return { status: "resolved", user: found[0], how: "single" };
+  // A lone partial match is not a resolution either. "ann" comes back as the
+  // single account "Joanne" whenever the Ann who was meant has no account here,
+  // and sharing with the only person who turned up is exactly the guess this
+  // is built to avoid. One candidate is still a question, not an answer.
   if (found.length === 0) return { status: "unresolved" };
   return { status: "ambiguous", candidates: found };
 };
@@ -63,9 +66,16 @@ export const pickRecipient = (query, candidates) => {
 /**
  * Read EXCALIDASH_SHARE_WITH: a recipient, optionally with an access level.
  *
- *   "davi@example.com"        -> edit, the useful default for your own boards
- *   "davi@example.com:view"   -> view
+ *   "davi@example.com"        -> view
+ *   "davi@example.com:edit"   -> edit
  *   "bootstrap-admin"         -> a user id, which skips the lookup entirely
+ *
+ * View is the default here, unlike the tool, and the difference is deliberate.
+ * This shares a board the agent is about to draw on, where drawing means
+ * reading the whole element array and writing it back, and draw_graph replaces
+ * the board's contents outright. Anything the recipient adds in the meantime is
+ * lost on the next call. Watching is safe, co-editing is not, so opting into
+ * edit is left to whoever knows they want it.
  *
  * Neither an email address nor a uuid contains a colon, so the last one is a
  * separator whenever what follows it is an access level.
@@ -82,7 +92,7 @@ export const parseShareTarget = (raw) => {
       if (recipient) return { recipient, access: suffix };
     }
   }
-  return { recipient: value, access: "edit" };
+  return { recipient: value, access: "view" };
 };
 
 /** "Davi <davi@example.com>", or whichever half of that exists. */

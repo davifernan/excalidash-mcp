@@ -189,6 +189,29 @@ export class ExcaliDashProvider {
     return new Error(`${method} ${path}: ${res.status}${reason ? ` — ${reason}` : ""}`);
   }
 
+  /**
+   * A GET whose failure is not allowed to look like an empty result.
+   *
+   * The forgiving #get answers null for every non-2xx, which is harmless when
+   * a missing board means "no board". It is not harmless for sharing: a 500
+   * while reading who a board is shared with would read as "shared with
+   * nobody", and revoking would then report that there was nothing to revoke
+   * while the access quietly stayed in place.
+   */
+  async #getStrict(path) {
+    await this.#login();
+    const send = () => fetch(`${this.backendUrl}${path}`, {
+      headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+    });
+    let res = await send();
+    if (res.status === 401 || res.status === 403) {
+      await this.#reauth();
+      res = await send();
+    }
+    if (!res.ok) throw await this.#fail(res, "GET", path);
+    return this.#json(res, path);
+  }
+
   async #delete(path) {
     await this.#login();
     const send = () => fetch(`${this.backendUrl}${path}`, {
@@ -280,7 +303,7 @@ export class ExcaliDashProvider {
 
   /** Candidate users for a name or address. Ignores queries under 3 characters. */
   async findUsers(drawingId, query) {
-    const data = await this.#get(
+    const data = await this.#getStrict(
       `/drawings/${drawingId}/share-resolve?q=${encodeURIComponent(query)}`,
     );
     return data?.users || [];
@@ -288,7 +311,7 @@ export class ExcaliDashProvider {
 
   /** Everyone this drawing is shared with, plus any active link policy. */
   async getSharing(drawingId) {
-    const data = await this.#get(`/drawings/${drawingId}/sharing`);
+    const data = await this.#getStrict(`/drawings/${drawingId}/sharing`);
     return { permissions: data?.permissions || [], linkShares: data?.linkShares || [] };
   }
 

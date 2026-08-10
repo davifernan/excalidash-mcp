@@ -364,20 +364,20 @@ async function applyShare(boardId, recipient, access, knownUserId = null) {
     return { status: "self", me };
   }
 
-  let user = null;
-  if (!knownUserId && wanted.length >= MIN_QUERY_LENGTH) {
-    const picked = pickRecipient(wanted, await provider.findUsers(boardId, wanted));
-    if (picked.status === "ambiguous") return { ...picked, query: wanted };
-    if (picked.status === "resolved") user = picked.user;
-  }
-
-  // The lookup searches name, username and address only, so a raw user id
-  // arrives here unresolved. Pass it through and let the instance reject it:
-  // that keeps ids working without this code having to guess what one is.
-  const granteeUserId = knownUserId ?? user?.id ?? wanted;
-  const who = user ? describeUser(user) : wanted;
-
   try {
+    let user = null;
+    if (!knownUserId && wanted.length >= MIN_QUERY_LENGTH) {
+      const picked = pickRecipient(wanted, await provider.findUsers(boardId, wanted));
+      if (picked.status === "ambiguous") return { ...picked, query: wanted };
+      if (picked.status === "resolved") user = picked.user;
+    }
+
+    // The lookup searches name, username and address only, so a raw user id
+    // arrives here unresolved. Pass it through and let the instance reject it:
+    // that keeps ids working without this code having to guess what one is.
+    const granteeUserId = knownUserId ?? user?.id ?? wanted;
+    const who = user ? describeUser(user) : wanted;
+
     if (access === "none") {
       const { permissions } = await provider.getSharing(boardId);
       const granted = permissions.find((p) => p.granteeUserId === granteeUserId);
@@ -416,8 +416,10 @@ function shareMessage(result, boardId) {
       return `"${result.me.email}" is the agent's own account, which already owns this board. Name the person it should be shared with instead.`;
     case "ambiguous":
       return [
-        `Nothing was shared. "${result.query}" matches more than one possible account, and picking one would risk giving the board to the wrong person.`,
-        `Ask which of these is meant, then call again with their exact email address:`,
+        result.candidates.length === 1
+          ? `Nothing was shared. "${result.query}" is not this account's exact name or address, and the instance matches on fragments, so this may well be somebody else.`
+          : `Nothing was shared. "${result.query}" matches several accounts, and picking one would risk giving the board to the wrong person.`,
+        `Confirm who is meant, then call again with their exact email address:`,
         ...result.candidates.map((u) => `  - ${describeUser(u)}`),
       ].join("\n");
     case "unresolved":

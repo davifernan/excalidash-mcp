@@ -52,10 +52,13 @@ test("refuses to choose between two names", () => {
   assert.equal(found.status, "ambiguous");
 });
 
-test("resolves a lone hit that was not typed in full", () => {
-  const found = pickRecipient("dav", [user("u1", "Davi", "davi@example.com")]);
-  assert.equal(found.status, "resolved");
-  assert.equal(found.how, "single");
+// The lookup matches substrings, so a query whose intended owner has no account
+// still comes back with somebody: "ann" returns the sole account "Joanne".
+// Sharing with the only person who turned up is a guess, however lonely.
+test("asks about a lone partial match instead of taking it", () => {
+  const found = pickRecipient("ann", [user("u1", "Joanne", "joanne@example.com")]);
+  assert.notEqual(found.status, "resolved");
+  assert.deepEqual(found.candidates.map((u) => u.id), ["u1"]);
 });
 
 test("resolves a username", () => {
@@ -81,28 +84,31 @@ test("survives a lookup that returned junk", () => {
   assert.equal(pickRecipient("davi", [{}, { email: null }]).status, "ambiguous");
 });
 
-test("reads a share target with and without an access level", () => {
+// A standing recipient watches a board the agent is still drawing on, and
+// drawing replaces the board's contents, so anything they add would be lost.
+// Edit has to be asked for.
+test("reads a share target, defaulting to view", () => {
   assert.deepEqual(parseShareTarget("davi@example.com"), {
-    recipient: "davi@example.com",
-    access: "edit",
-  });
-  assert.deepEqual(parseShareTarget(" davi@example.com:view "), {
     recipient: "davi@example.com",
     access: "view",
   });
-  assert.deepEqual(parseShareTarget("bootstrap-admin:edit"), {
-    recipient: "bootstrap-admin",
+  assert.deepEqual(parseShareTarget(" davi@example.com:edit "), {
+    recipient: "davi@example.com",
     access: "edit",
+  });
+  assert.deepEqual(parseShareTarget("bootstrap-admin:view"), {
+    recipient: "bootstrap-admin",
+    access: "view",
   });
 });
 
 // A colon that is not an access level belongs to the recipient. Only "view" and
 // "edit" end a target, so a stray one cannot silently truncate an id.
 test("keeps a colon that does not introduce an access level", () => {
-  assert.deepEqual(parseShareTarget("weird:id"), { recipient: "weird:id", access: "edit" });
+  assert.deepEqual(parseShareTarget("weird:id"), { recipient: "weird:id", access: "view" });
   assert.equal(parseShareTarget(""), null);
   assert.equal(parseShareTarget(undefined), null);
-  assert.deepEqual(parseShareTarget(":view"), { recipient: ":view", access: "edit" });
+  assert.deepEqual(parseShareTarget(":view"), { recipient: ":view", access: "view" });
 });
 
 test("describes a user by whichever half exists", () => {

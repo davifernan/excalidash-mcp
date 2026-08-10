@@ -88,7 +88,7 @@ The two proxy hints are required here: a backend running with `TRUST_PROXY` answ
 | `EXCALIDASH_PASSWORD` | Yes | Agent user password |
 | `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly |
 | `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
-| `EXCALIDASH_SHARE_WITH` | No | Share every new board with this person: an email address or user id, optionally `:view` or `:edit` (default `edit`) |
+| `EXCALIDASH_SHARE_WITH` | No | Share every new board with this person: an email address or user id, optionally `:view` or `:edit` (default `view`, since the agent is still drawing on it) |
 
 ## Running on a PaaS (Coolify, Dokku, …)
 
