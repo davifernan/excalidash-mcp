@@ -466,17 +466,14 @@ async function autoShare(boardId) {
 }
 
 server.registerTool("share_board", {
-  description: `Give a person on your ExcaliDash instance access to a board, or take it away again.
+  description: `Give a person access to a board, or take it away with access "none".
 
-Boards this server creates belong to the agent's own account and nobody else can open them, so a
-finished drawing has to be shared before a human can see it. Call this once the board is ready.
-
-Pass an email address when you have one: names are matched loosely, and if a name could mean more
-than one account nothing is shared and you are asked which one. Use access "none" to revoke.`,
+Boards this server creates belong to the agent's own account, so nobody else can open one until it
+is shared. Call this when the drawing is finished.`,
   inputSchema: z.object({
     board_id: z.string(),
-    with: z.string().describe("Email address of the recipient, or their name on the instance"),
-    access: z.enum(ACCESS_LEVELS).optional().describe("Default: edit. Use 'none' to revoke access"),
+    with: z.string().describe("Recipient's email address, or their name on the instance"),
+    access: z.enum(ACCESS_LEVELS).optional().describe("Default: edit"),
   }),
 }, async ({ board_id, with: recipient, access }) => {
   try {
@@ -576,7 +573,7 @@ server.registerTool("update_element", {
     els[idx] = updated;
     await provider.pushLive(board_id, [updated], els.map(e => e.id));
     await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Updated "${element_id}"` }] };
+    return { content: [{ type: "text", text: `Updated "${element_id}". ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -648,7 +645,7 @@ server.registerTool("rename_element", {
 
     await provider.pushLive(board_id, changed, els.map(e => e.id));
     await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Renamed "${old_id}" → "${new_id}" (${changed.length} elements updated)` }] };
+    return { content: [{ type: "text", text: `Renamed "${old_id}" to "${new_id}" (${changed.length} elements updated). ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -662,17 +659,40 @@ server.registerTool("delete_elements", {
   try {
     if (element_ids[0] === "all") {
       const r = await pushElements(board_id, [], "replace");
-      return { content: [{ type: "text", text: "Cleared." }] };
+      return { content: [{ type: "text", text: `Cleared. ${r.url}` }] };
     }
     await provider.joinRoom(board_id);
     const existing = await provider.getDrawing(board_id);
     if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
-    const deleteSet = new Set(element_ids);
+    // Only what is still on the board can be deleted. Matching against every
+    // element would also match the tombstones of earlier deletions, and a
+    // second delete of the same name would report a success that removed
+    // nothing at all.
+    const live = (existing.elements || []).filter(e => !e.isDeleted);
+    const deleteSet = new Set(live.filter(e => element_ids.includes(e.id)).map(e => e.id));
     // A shape's label is a separate element bound to it. Deleting only the shape
     // leaves the label floating on the canvas.
-    for (const el of existing.elements || []) {
+    for (const el of live) {
       if (el.containerId && deleteSet.has(el.containerId)) deleteSet.add(el.id);
     }
+
+    // Nothing matched, so nothing was deleted. Reporting "deleted 0" without
+    // saying so reads as done, and the caller moves on believing the board
+    // changed. Names are the only handle here, and they are easy to get wrong.
+    if (deleteSet.size === 0) {
+      // Bound labels carry generated ids nobody typed, so naming them back as
+      // suggestions is noise. Only what a caller could have meant is listed.
+      const known = live.filter(e => !e.containerId).map(e => e.id);
+      return {
+        content: [{
+          type: "text",
+          text: `Nothing was deleted: no element on this board is named ${element_ids.map(id => `"${id}"`).join(", ")}.`
+            + (known.length ? ` The board has ${known.slice(0, 15).join(", ")}${known.length > 15 ? ", …" : ""}.` : " The board is empty."),
+        }],
+        isError: true,
+      };
+    }
+
     const now = Date.now();
     const els = (existing.elements || []).map(e =>
       deleteSet.has(e.id)
@@ -680,9 +700,10 @@ server.registerTool("delete_elements", {
         : e
     );
     const deleted = els.filter(e => deleteSet.has(e.id));
+
     await provider.pushLive(board_id, deleted, els.map(e => e.id));
     await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Deleted ${deleted.length} elements.` }] };
+    return { content: [{ type: "text", text: `Deleted ${deleted.length} elements. ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
