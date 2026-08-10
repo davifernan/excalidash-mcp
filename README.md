@@ -128,7 +128,7 @@ skips the lookup entirely.
 | `draw_graph` | Node/edge diagram with automatic layout. **Start here.** |
 | `draw_scene` | Place elements at absolute coordinates |
 | `read_me` | Format cheat sheet; the agent calls this once before drawing |
-| `list_boards` · `create_board` · `read_board` · `clear_board` | Board management |
+| `list_boards` · `create_board` · `read_board` | Board management |
 | `share_board` | Give a person access to a finished board, or take it away |
 | `update_element` · `delete_elements` · `rename_element` | Edit by name, live |
 | `board_history` · `restore_version` | Browse and restore snapshots<sup>†</sup> |
