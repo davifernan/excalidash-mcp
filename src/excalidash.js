@@ -32,6 +32,10 @@ export class ExcaliDashProvider {
     this.authCookies = [];
     this.socket = null;
     this.joinedRooms = new Set();
+    // Who we are signed in as. Sharing needs it: the instance hides the current
+    // user from its own lookup, so "share with the agent's own account" would
+    // otherwise come back as an unhelpful "no such user".
+    this.user = null;
 
     // Socket.IO must be given an origin, never a URL with a path: io() would read
     // the path as a namespace. When the backend is reached through a prefix
@@ -104,6 +108,8 @@ export class ExcaliDashProvider {
     });
     if (!loginRes.ok) throw new Error(`Login failed: ${loginRes.status}`);
 
+    this.user = (await loginRes.clone().json().catch(() => null))?.user ?? null;
+
     const loginCookies = loginRes.headers.getSetCookie?.() || [];
     this.authCookies.push(...loginCookies);
     const ac = loginCookies.find(c => c.startsWith("excalidash-access-token="));
@@ -160,7 +166,41 @@ export class ExcaliDashProvider {
         body: JSON.stringify(body),
       });
     }
-    if (!res.ok) throw new Error(`POST ${path}: ${res.status}`);
+    if (!res.ok) throw await this.#fail(res, "POST", path);
+    return this.#json(res, path);
+  }
+
+  /**
+   * Turn a failed response into an error that names the reason.
+   *
+   * The status alone is not enough for sharing: granting access answers 404
+   * both for "you don't own this board" and for "no such user", and the two
+   * need very different advice. The body separates them.
+   */
+  async #fail(res, method, path) {
+    const text = await res.text().catch(() => "");
+    let reason = "";
+    try {
+      const body = JSON.parse(text);
+      reason = body?.message || body?.error || "";
+    } catch {
+      reason = text.slice(0, 120);
+    }
+    return new Error(`${method} ${path}: ${res.status}${reason ? ` — ${reason}` : ""}`);
+  }
+
+  async #delete(path) {
+    await this.#login();
+    const send = () => fetch(`${this.backendUrl}${path}`, {
+      method: "DELETE",
+      headers: { ...this.proxyHeaders, "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+    });
+    let res = await send();
+    if (res.status === 401 || res.status === 403) {
+      await this.#reauth();
+      res = await send();
+    }
+    if (!res.ok) throw await this.#fail(res, "DELETE", path);
     return this.#json(res, path);
   }
 
@@ -224,6 +264,44 @@ export class ExcaliDashProvider {
   }
   async restoreSnapshot(drawingId, snapshotId) {
     return this.#post(`/drawings/${drawingId}/history/${snapshotId}/restore`, {});
+  }
+
+  // --- Sharing ---
+  //
+  // All four are owner-only on the instance: they answer 404 when the signed-in
+  // account does not own the drawing, which is the normal case for a board the
+  // agent was merely invited to.
+
+  /** Who we are signed in as, once the session exists. */
+  async whoAmI() {
+    await this.#login();
+    return this.user;
+  }
+
+  /** Candidate users for a name or address. Ignores queries under 3 characters. */
+  async findUsers(drawingId, query) {
+    const data = await this.#get(
+      `/drawings/${drawingId}/share-resolve?q=${encodeURIComponent(query)}`,
+    );
+    return data?.users || [];
+  }
+
+  /** Everyone this drawing is shared with, plus any active link policy. */
+  async getSharing(drawingId) {
+    const data = await this.#get(`/drawings/${drawingId}/sharing`);
+    return { permissions: data?.permissions || [], linkShares: data?.linkShares || [] };
+  }
+
+  async grantAccess(drawingId, granteeUserId, permission) {
+    const data = await this.#post(`/drawings/${drawingId}/permissions`, {
+      granteeUserId,
+      permission,
+    });
+    return data?.permission || null;
+  }
+
+  async revokeAccess(drawingId, permissionId) {
+    return this.#delete(`/drawings/${drawingId}/permissions/${permissionId}`);
   }
 
   async joinRoom(drawingId) {
