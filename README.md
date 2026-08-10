@@ -148,6 +148,7 @@ itself and exported with `export_png`.
 
 ## Docs
 
+- [Diagramming skill](skills/diagramming/SKILL.md): what to do and what to avoid, for agents that draw
 - [Examples](docs/examples.md): more diagrams, each with the DSL that produced it
 - [Setup](docs/setup.md): ExcaliDash instance, the `/api` path, environment variables
 - [Scene DSL](docs/scene-dsl.md): manual placement, element reference
