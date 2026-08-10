@@ -30,6 +30,46 @@ to your public URL. Either add the proxy hints:
 The account doesn't exist or the password is wrong. Check it by logging into ExcaliDash in a browser
 with exactly those credentials.
 
+## Login suddenly fails after it had been working
+
+Don't assume the password broke. ExcaliDash rate-limits sign-ins per account and IP, by default 20
+attempts per 15 minutes, and every start of this server is one login. Restart it in a loop, or run a
+few test scripts, and you are there.
+
+What you get then is **not** a 401, so it doesn't read as a credentials problem at all. Every login
+response carries the limit as headers, and they say how long it lasts:
+
+```
+ratelimit-policy: 20;w=900     20 attempts per 15 minutes
+ratelimit-remaining: 4
+ratelimit-reset: 250           seconds until it clears
+```
+
+Wait it out instead of retrying, because the rejected attempts count too. An admin can raise the
+limit in ExcaliDash's auth settings.
+
+## The agent gives me a board link and it doesn't open
+
+The agent has its own account, so the boards it creates belong to that account, not yours. Ask it to
+share the board:
+
+```
+share_board(board_id, with="you@example.com")
+```
+
+Or set `EXCALIDASH_SHARE_WITH` to your address so every board reaches you automatically. See
+[Sharing](../README.md#sharing).
+
+## `share_board` won't accept a person's name
+
+It resolves only an exact address, an exact name or username, or a user id. Anything else comes back
+as a list to confirm, including when there is exactly one match, because the instance's lookup
+matches fragments: a search for `ann` returns the account `Joanne` when the Ann you meant has no
+account at all. Give the email address and it goes through.
+
+The recipient does need an account on the same instance. There is no way to share a board out to
+somebody who has none.
+
 ## REST works, but nothing appears live
 
 Socket.IO isn't getting through. The stock ExcaliDash frontend proxies `/socket.io/` with the
