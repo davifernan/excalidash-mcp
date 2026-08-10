@@ -329,16 +329,6 @@ server.registerTool("read_board", {
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
-server.registerTool("clear_board", {
-  description: "Remove all elements from a board.",
-  inputSchema: z.object({ board_id: z.string() }),
-}, async ({ board_id }) => {
-  try {
-    const r = await pushElements(board_id, [], "replace");
-    return { content: [{ type: "text", text: `Cleared. ${r.url}` }] };
-  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
-});
-
 // ============================================================
 // Sharing
 //
@@ -516,18 +506,20 @@ architectures, flows, pipelines and any boxes-and-arrows diagram — you describ
 the layout engine places everything, so boxes never overlap and arrows don't cut through them.
 
 Format (no coordinates):
-  direction LR            # LR, TB (default), RL, BT
+  direction LR            # LR, TB (default), RL, BT. LR for pipelines, TB for hierarchies
   title 'Request Pipeline'
   node client 'Client' color=blue fill=blue
   node api 'Backend Service' shape=diamond color=green fill=green
   edge client -> api 'HTTPS'
 
 Colors: blue, green, orange, purple, red, yellow, teal, pink, gray. Shapes: rect (default), circle,
-diamond. Long labels wrap automatically and boxes are sized to fit.`,
+diamond. Long labels wrap automatically and boxes are sized to fit.
+
+Edge labels: two or three words. One sits mid-arrow, so a longer one reaches onto a neighbouring box.`,
   inputSchema: z.object({
     board_id: z.string(),
     graph: z.string().describe("Graph DSL — node/edge lines, no coordinates"),
-    mode: z.enum(["append", "replace"]).optional().describe("Default: replace"),
+    mode: z.enum(["append", "replace"]).optional().describe("Default: replace, which empties the board first; append adds to it"),
   }),
 }, async ({ board_id, graph, mode }) => {
   try {
@@ -650,7 +642,7 @@ server.registerTool("rename_element", {
 });
 
 server.registerTool("delete_elements", {
-  description: "Delete elements by name/ID (e.g. ['frontend', 'api-arrow']). Use read_board to see all element IDs.",
+  description: "Delete elements by name/ID (e.g. ['frontend', 'api-arrow']), or ['all'] to empty the board. Use read_board to see all element IDs.",
   inputSchema: z.object({
     board_id: z.string(),
     element_ids: z.array(z.string()),
