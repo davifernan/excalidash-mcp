@@ -73,7 +73,7 @@ rect api 400,100 200x100 color=green fill=green 'Backend' 'Express|Node 22'
 
 ## Modes
 
-`mode=replace` clears the board first; `mode=append` (the default) adds to what is there.
+`mode=replace` clears only what this server drew before, so hand-drawn work on the same board survives a redraw; `mode=append` adds to what is there; `mode=wipe` clears the board completely, hand-drawn work included.
 
 ## Layout guidance
 

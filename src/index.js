@@ -24,14 +24,46 @@ const provider = new ExcaliDashProvider();
 // ============================================================
 // Convert elements via Excalidraw library (Playwright)
 // ============================================================
+/**
+ * Turn the simplified DSL elements into real Excalidraw elements.
+ *
+ * This used to fall back to the simplified elements when the headless browser
+ * was unavailable, and report success. Those objects are not Excalidraw
+ * elements: a `label` is not a bound text element, bindings and version fields
+ * are missing. They were then persisted, so a Playwright or CDN hiccup quietly
+ * corrupted the board. Fail instead.
+ */
 async function convert(elements) {
   try {
-    const converted = await convertElements(elements);
-    return converted;
+    return stableLabelIds(await convertElements(elements));
   } catch (err) {
-    console.error("Excalidraw conversion failed, using raw elements:", err.message);
-    return elements;
+    throw new Error(
+      `Could not render the elements — the headless Excalidraw conversion failed (${err.message}). ` +
+      `Nothing was written to the board.`);
   }
+}
+
+/**
+ * Give bound labels an id derived from their container.
+ *
+ * The library invents a random id for every text it binds into a shape. On a
+ * redraw the boxes keep their ids but their labels do not, so each pass left
+ * the previous labels behind as tombstones — ten of them after three redraws of
+ * a six-element graph. Deriving the id makes a label the same element again.
+ */
+function stableLabelIds(elements) {
+  const renamed = new Map();
+  const out = elements.map((el) => {
+    if (!el.containerId) return el;
+    const id = `${el.containerId}-label`;
+    renamed.set(el.id, id);
+    return { ...el, id };
+  });
+  if (!renamed.size) return out;
+  return out.map((el) =>
+    el.boundElements?.some((b) => renamed.has(b.id))
+      ? { ...el, boundElements: el.boundElements.map((b) => (renamed.has(b.id) ? { ...b, id: renamed.get(b.id) } : b)) }
+      : el);
 }
 
 // ============================================================
@@ -116,6 +148,20 @@ function zOrderConverted(elements) {
 // ============================================================
 // Core: push elements live + persist
 // ============================================================
+/**
+ * Marks an element as drawn by this server.
+ *
+ * Without it "replace" has no way to tell its own output from what a person
+ * drew by hand, and clearing the board was the only thing it could do.
+ */
+const MCP_SOURCE = "excalidash-mcp";
+const stampOwnership = (elements) =>
+  elements.map((el) => ({
+    ...el,
+    customData: { ...(el.customData || {}), source: MCP_SOURCE },
+  }));
+const isOwnElement = (el) => el?.customData?.source === MCP_SOURCE;
+
 async function pushElements(boardId, newElements, mode = "append", opts = {}) {
   await provider.joinRoom(boardId);
 
@@ -131,27 +177,49 @@ async function pushElements(boardId, newElements, mode = "append", opts = {}) {
   if (!existing) throw new Error(`Board ${boardId} not found`);
 
   const existingEls = existing.elements || [];
+  convertedNew = stampOwnership(convertedNew);
   const now = Date.now();
   let merged, socketElements;
 
-  if (mode === "replace" && convertedNew.length === 0) {
-    const deleted = existingEls.map(e => ({
+  if (mode === "replace" || mode === "wipe") {
+    // "replace" clears only what this server drew, so hand-drawn work on the
+    // same board survives a redraw. "wipe" is the old behaviour, kept for
+    // boards whose contents predate the marker.
+    const previouslyOwn = mode === "wipe" ? existingEls : existingEls.filter(isOwnElement);
+    const kept = mode === "wipe" ? [] : existingEls.filter((e) => !isOwnElement(e));
+
+    // A redraw reuses the same ids — node "api" stays "api". Writing the new
+    // element and a tombstone for the old one would put two entries with the
+    // same id into the board, and since the tombstone carries the higher
+    // version, collaboration would settle on the deletion. So a reused id is
+    // carried forward as a new version of the same element instead.
+    const priorById = new Map(previouslyOwn.map((e) => [e.id, e]));
+    const clash = convertedNew.find((e) => kept.some((k) => k.id === e.id));
+    if (clash) {
+      throw new Error(
+        `Element id "${clash.id}" is already used by something this server does not own. ` +
+        `Rename the node, or use mode "wipe" to clear the board first.`);
+    }
+
+    const survivors = convertedNew.map((el) => {
+      const prior = priorById.get(el.id);
+      if (!prior) return el;
+      priorById.delete(el.id);
+      return { ...el, version: Math.max(prior.version || 1, el.version || 1) + 1, updated: now };
+    });
+
+    // Whatever this server drew last time and did not draw again is gone.
+    const deleted = [...priorById.values()].map((e) => ({
       ...e, isDeleted: true, updated: now,
       version: (e.version || 1) + 1,
       versionNonce: Math.floor(Math.random() * 2147483647),
     }));
-    merged = deleted;
-    socketElements = deleted;
-  } else if (mode === "replace") {
-    const deleted = existingEls.map(e => ({
-      ...e, isDeleted: true, updated: now,
-      version: (e.version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
-    }));
-    // Z-ordered active elements FIRST, deleted at end
-    // Array position = z-order in Excalidraw
-    merged = [...convertedNew, ...deleted];
-    socketElements = merged;
+
+    // Array position is z-order. Generated content goes behind anything drawn
+    // by hand: someone who annotates a diagram wants their note on top of it,
+    // not buried under the next redraw.
+    merged = [...survivors, ...kept, ...deleted];
+    socketElements = [...survivors, ...deleted];
   } else {
     merged = [...existingEls, ...convertedNew];
     socketElements = convertedNew;
@@ -230,7 +298,7 @@ blue=#4a9eed, green=#22c55e, red=#ef4444, purple=#8b5cf6, orange=#f59e0b, gray=#
 
 ## draw_scene DSL
 
-One element per line. Use \`mode=replace\` to redraw entirely.
+One element per line. Use \`mode=replace\` to redraw this server's own output; hand-drawn elements survive.
 
 ### Shapes (with label)
 \`\`\`
@@ -484,12 +552,12 @@ is shared. Call this when the drawing is finished.`,
 server.registerTool("draw_scene", {
   description: `Draw elements with compact DSL. Live updates in open browsers.
 Call read_me first for the full format guide.
-Use mode=replace to clear and redraw. Use mode=append (default) to add to existing.
+Use mode=replace to redraw what this server drew before, leaving hand-drawn work untouched. Use mode=append (default) to add. Use mode=wipe only to clear the entire board.
 IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...'). This makes update/delete easy.`,
   inputSchema: z.object({
     board_id: z.string(),
     scene: z.string().describe("DSL scene (one element per line)"),
-    mode: z.enum(["append", "replace"]).optional(),
+    mode: z.enum(["append", "replace", "wipe"]).optional(),
   }),
 }, async ({ board_id, scene, mode }) => {
   try {
@@ -519,7 +587,7 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
   inputSchema: z.object({
     board_id: z.string(),
     graph: z.string().describe("Graph DSL — node/edge lines, no coordinates"),
-    mode: z.enum(["append", "replace"]).optional().describe("Default: replace, which empties the board first; append adds to it"),
+    mode: z.enum(["append", "replace", "wipe"]).optional().describe("Default: replace, which clears only what this server drew before; append adds to it; wipe clears the whole board including hand-drawn work"),
   }),
 }, async ({ board_id, graph, mode }) => {
   try {
@@ -529,7 +597,7 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
     }
     const unknown = parsed.edges.filter(e =>
       !parsed.nodes.some(n => n.id === e.from) || !parsed.nodes.some(n => n.id === e.to));
-    const elements = layoutGraph(parsed);
+    const elements = await layoutGraph(parsed);
     const r = await pushElements(board_id, elements, mode || "replace", { preLaidOut: true });
     const warn = unknown.length
       ? `\nSkipped ${unknown.length} edge(s) referencing unknown nodes: ${unknown.map(e => `${e.from}->${e.to}`).join(", ")}`
@@ -642,7 +710,7 @@ server.registerTool("rename_element", {
 });
 
 server.registerTool("delete_elements", {
-  description: "Delete elements by name/ID (e.g. ['frontend', 'api-arrow']), or ['all'] to empty the board. Use read_board to see all element IDs.",
+  description: "Delete elements by name/ID (e.g. ['frontend', 'api-arrow']), or ['all'] to empty the board — that clears everything, hand-drawn work included. Use read_board to see all element IDs.",
   inputSchema: z.object({
     board_id: z.string(),
     element_ids: z.array(z.string()),
@@ -650,8 +718,10 @@ server.registerTool("delete_elements", {
 }, async ({ board_id, element_ids }) => {
   try {
     if (element_ids[0] === "all") {
-      const r = await pushElements(board_id, [], "replace");
-      return { content: [{ type: "text", text: `Cleared. ${r.url}` }] };
+      // "all" means all — including hand-drawn work, which "replace" now
+      // deliberately spares.
+      const r = await pushElements(board_id, [], "wipe");
+      return { content: [{ type: "text", text: `Cleared the whole board, hand-drawn work included. ${r.url}` }] };
     }
     await provider.joinRoom(board_id);
     const existing = await provider.getDrawing(board_id);

@@ -67,8 +67,7 @@ backend:
   "env": {
     "EXCALIDASH_BACKEND_URL": "http://127.0.0.1:6768",
     "EXCALIDASH_URL": "https://draw.example.com",
-    "EXCALIDASH_EMAIL": "agent@example.com",
-    "EXCALIDASH_PASSWORD": "your-agent-password",
+    "EXCALIDASH_API_KEY": "exd_...",
     "EXCALIDASH_PROXY_PROTO": "https",
     "EXCALIDASH_PROXY_HOST": "draw.example.com"
   }
@@ -84,8 +83,8 @@ The two proxy hints are required here: a backend running with `TRUST_PROXY` answ
 |----------|----------|-------------|
 | `EXCALIDASH_BACKEND_URL` | Yes | Where the backend is reachable: `https://draw.example.com/api` through the frontend proxy, or `http://127.0.0.1:6768` direct. A path prefix like `/api` is supported and is applied to Socket.IO too. |
 | `EXCALIDASH_URL` | Yes | Public frontend URL, used to build board links |
-| `EXCALIDASH_EMAIL` | Yes | Agent user email |
-| `EXCALIDASH_PASSWORD` | Yes | Agent user password |
+| `EXCALIDASH_API_KEY` | One of the two | API key from *Account → API keys*, or handed out by an admin. Preferred: no password in the config, and the key can be revoked on its own. |
+| `EXCALIDASH_EMAIL` + `EXCALIDASH_PASSWORD` | One of the two | Email and password of the agent user. Only needed when no API key is available. |
 | `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly |
 | `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
 | `EXCALIDASH_SHARE_WITH` | No | Share every new board with this person: an email address or user id, optionally `:view` or `:edit` (default `view`, since the agent is still drawing on it) |

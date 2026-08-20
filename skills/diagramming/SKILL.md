@@ -46,16 +46,16 @@ extreme, flip the direction and redraw.
 ## Known rough edges
 
 - **A shortcut past the middle of a chain.** With `a -> b -> c` and also `a -> c`, the shortcut has
-  to get past `b` somehow, so it either bends or takes a wide detour. If it looks bad, ask whether
-  that edge earns its place.
+  to get past `b`. The arrow stays straight and `b` steps aside instead, which widens the drawing.
+  If the result looks lopsided, ask whether that edge earns its place.
 - **More than two edges between the same pair.** They fan apart and the labels crowd. Usually one
   edge with a combined label reads better.
-- **Self-loops** are drawn as an arc above the node. Several on one node stack, but three or more
-  gets noisy.
+- **Self-loops** are drawn as a loop off the right-hand side of the node, with the label beside it.
+  One reads fine; several on the same node draw on top of each other.
 
 ## Two footguns
 
-- `draw_graph` defaults to `mode=replace` and wipes the board. Pass `mode=append` if you meant to add.
+- `draw_graph` defaults to `mode=replace`, which clears only the elements this server drew before — anything drawn by hand stays. Pass `mode=append` to add without clearing, or `mode=wipe` to empty the board completely.
 - Give every element an id in `draw_scene` (`rect frontend 100,100 ...`). Without one you cannot
   `update_element` or `delete_elements` later without redrawing everything.
 

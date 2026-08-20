@@ -164,13 +164,20 @@ export class ExcaliDashProvider {
     let res = await fetch(`${this.backendUrl}${path}`, {
       headers: this.#authHeaders(),
     });
-    if (res.status === 401 || res.status === 403) {
+    // Retrying only helps when a session can be re-established. An API key that
+    // is rejected will be rejected again, so retrying with it just doubles the
+    // requests and hides the reason.
+    if ((res.status === 401 || res.status === 403) && !this.apiKey) {
       await this.#reauth();
       res = await fetch(`${this.backendUrl}${path}`, {
         headers: this.#authHeaders(),
       });
     }
-    if (!res.ok) return null;
+    // Only "not found" is genuinely empty. Turning every other failure into
+    // null made a missing API key scope, an invalid key or a backend error read
+    // as "no boards" or "board not found".
+    if (res.status === 404) return null;
+    if (!res.ok) throw await this.#fail(res, "GET", path);
     return this.#json(res, path);
   }
 

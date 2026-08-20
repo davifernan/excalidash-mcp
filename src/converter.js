@@ -22,7 +22,34 @@ async function getPage() {
   _page = await _browser.newPage();
   await _page.goto(`file://${HTML_PATH}`, { waitUntil: "networkidle", timeout: 30000 });
   await _page.waitForFunction("window.__READY__ === true", { timeout: 15000 });
+  await warmUpFonts(_page);
   return _page;
+}
+
+/**
+ * Draw one throwaway element before anything real is measured.
+ *
+ * Excalidraw registers its own font faces lazily, on the first export. Until
+ * that has happened the document has no faces at all, so every measurement
+ * falls back to the browser's substitute — which is what made containers come
+ * out too small and clip their labels. Measured: a label that should be 183px
+ * wide came out as 141px beforehand. One dummy export registers all 230 faces,
+ * then wait for the set to settle.
+ */
+async function warmUpFonts(page) {
+  await page.evaluate(async () => {
+    const [probe] = window.convertToExcalidrawElements(
+      [{ type: "text", x: 0, y: 0, text: "Ag", fontSize: 20 }],
+      { regenerateIds: true },
+    );
+    await window.exportToCanvas({
+      elements: [probe],
+      appState: { exportBackground: false },
+      files: {},
+    });
+    await document.fonts.ready;
+    window.__FONTS_AFTER_WARMUP__ = [...document.fonts].map((f) => `${f.family}:${f.status}`);
+  });
 }
 
 /**
@@ -66,6 +93,30 @@ export async function renderPng(elements, { scale = 2, padding = 32, background 
   }, { elements, scale, padding, background });
 }
 
+/**
+ * Break labels into lines that fit their `maxTextWidth`, measured in the face
+ * the export actually draws with. One round trip for the whole batch.
+ *
+ * Each result carries two widths: `width` is the widest resulting line, and
+ * `widestWord` is the widest single word. A box narrower than `widestWord`
+ * makes Excalidraw break that word mid-way, so it is reported separately
+ * rather than hidden inside the wrap.
+ */
+export async function layoutLabels(items) {
+  if (!items.length) return [];
+  const page = await getPage();
+  return page.evaluate((batch) => window.layoutLabels(batch), items);
+}
+
+/** Widths of the given strings in the export face. */
+export async function measureStrings(strings, fontSize, family) {
+  const page = await getPage();
+  return page.evaluate(
+    ({ strings, fontSize, family }) => window.measureStrings(strings, fontSize, family),
+    { strings, fontSize, family },
+  );
+}
+
 /** Release the headless browser held for conversions. */
 export async function closeConverter() {
   const browser = _browser;
@@ -73,3 +124,4 @@ export async function closeConverter() {
   _browser = null;
   if (browser?.isConnected()) await browser.close().catch(() => {});
 }
+
