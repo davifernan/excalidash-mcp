@@ -440,41 +440,86 @@ function outerFor(shape, textWidth, textHeight) {
  * cannot fit an unbreakable word grows past MAX_W rather than tearing it apart.
  */
 async function sizeNodes(nodes) {
-  const wanted = nodes.map((n) => {
-    const shape = n.shape || "rectangle";
-    const fontSize = Number.isFinite(n.fontSize) ? n.fontSize : 16;
-    return {
-      text: n.label || n.id,
-      fontSize,
-      maxTextWidth: Math.max(40, textWidthFor(shape, MAX_W)),
-      shape,
-      node: n,
-    };
-  });
+  const wanted = nodes.map((n) => ({
+    node: n,
+    shape: n.shape || "rectangle",
+    fontSize: Number.isFinite(n.fontSize) ? n.fontSize : 16,
+    text: n.label || n.id,
+  }));
 
+  // First pass: how wide the label wants to be on a single line, and how wide
+  // its longest unbreakable word is.
+  const natural = await layoutLabels(
+    wanted.map(({ text, fontSize }) => ({ text, fontSize, maxTextWidth: Infinity })),
+  );
+
+  // Second pass: every candidate wrap width for every node, in one batch.
+  const candidates = wanted.map((want, i) => wrapCandidates(want, natural[i]));
+  const flat = candidates.flat();
   const measured = await layoutLabels(
-    wanted.map(({ text, fontSize, maxTextWidth }) => ({ text, fontSize, maxTextWidth })),
+    flat.map(({ text, fontSize, maxTextWidth }) => ({ text, fontSize, maxTextWidth })),
   );
 
   const sized = new Map();
+  let cursor = 0;
   wanted.forEach((want, i) => {
-    const m = measured[i];
-    const textHeight = m.lines.length * want.fontSize * LINE_H;
-    // A single word wider than the wrap limit cannot be broken without tearing
-    // it; grow the box to hold it instead.
-    const textWidth = Math.max(m.width, m.widestWord);
-    const outer = outerFor(want.shape, textWidth, textHeight);
+    const mine = measured.slice(cursor, cursor + candidates[i].length);
+    cursor += candidates[i].length;
+    const best = pickShape(want.shape, want.fontSize, mine);
 
     sized.set(want.node.id, {
       ...want.node,
       shape: want.shape,
       fontSize: want.fontSize,
-      text: m.lines.join("\n"),
-      width: Math.max(MIN_W, outer.width),
-      height: Math.max(MIN_H, outer.height),
+      text: best.lines.join("\n"),
+      width: Math.max(MIN_W, best.width),
+      height: Math.max(MIN_H, best.height),
     });
   });
   return sized;
+}
+
+/**
+ * The wrap widths worth measuring for one label.
+ *
+ * A rectangle simply wraps at MAX_W. The other shapes do not: Excalidraw gives
+ * a diamond's bound label only half the container width, so where the line
+ * breaks decides whether the shape comes out as a 7:1 splinter or a diamond.
+ * Aiming for a line count instead of a fixed width gives something to choose
+ * from.
+ */
+function wrapCandidates(want, natural) {
+  const floor = Math.ceil(natural.widestWord);   // narrower would tear a word
+  if (want.shape === "rectangle") {
+    return [{ ...want, maxTextWidth: Math.max(floor, textWidthFor("rectangle", MAX_W)) }];
+  }
+  const out = [];
+  for (let lines = 1; lines <= 4; lines++) {
+    const width = Math.max(floor, Math.ceil(natural.width / lines));
+    if (!out.some((c) => c.maxTextWidth === width)) out.push({ ...want, maxTextWidth: width });
+  }
+  return out;
+}
+
+// How wide a shape should be relative to its height. A diamond much flatter
+// than this stops reading as a decision node; much taller wastes vertical room.
+const TARGET_RATIO = { diamond: 1.9, ellipse: 2.2, rectangle: 2.6 };
+
+/** Of the measured candidates, the one whose shape reads best. */
+function pickShape(shape, fontSize, measurements) {
+  const target = TARGET_RATIO[shape] ?? 2.6;
+  let best = null;
+  for (const m of measurements) {
+    const textWidth = Math.max(m.width, m.widestWord);
+    const textHeight = m.lines.length * fontSize * LINE_H;
+    const outer = outerFor(shape, textWidth, textHeight);
+    const ratio = outer.width / outer.height;
+    // Being too flat is worse than being too tall, so penalise it harder.
+    const off = ratio > target ? ratio / target : (target / ratio) * 0.7;
+    const score = off + (outer.width * outer.height) / 4_000_000;
+    if (!best || score < best.score) best = { score, lines: m.lines, ...outer };
+  }
+  return best;
 }
 
 /** Rendered widths of the distinct edge labels, for dagre and manual placement. */

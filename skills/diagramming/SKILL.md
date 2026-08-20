@@ -52,6 +52,10 @@ extreme, flip the direction and redraw.
   edge with a combined label reads better.
 - **Self-loops** are drawn as a loop off the right-hand side of the node, with the label beside it.
   One reads fine; several on the same node draw on top of each other.
+- **Long labels in a diamond.** Excalidraw gives a diamond's label only half the shape's width, so a
+  diamond is always about 1.6x wider than a rectangle holding the same text, and a single long word
+  sets a floor nothing can go below. Decision nodes want two or three words — `Gueltig?`,
+  `Cache leer oder alt?` — not a sentence.
 
 ## Two footguns
 
