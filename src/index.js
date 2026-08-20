@@ -18,6 +18,7 @@ import {
   pickRecipient,
 } from "./sharing.js";
 import { convertElements, closeConverter, renderPng } from "./converter.js";
+import { editableMermaidElements, mermaidErrorMessage, stableMermaidIds } from "./mermaid.js";
 import { writeFile } from "node:fs/promises";
 import { exportPath, checkedUrl } from "./exports.js";
 import { reviewChanges } from "./elementProps.js";
@@ -25,6 +26,7 @@ import { expandDeletion, severReferences, retargetReferences, reflowDependants }
 import { edgePoint, centre } from "./geometry.js";
 import { checkIds } from "./validate.js";
 import { browserLaunchOptions } from "./browser.js";
+import packageMetadata from "../package.json" with { type: "json" };
 
 const provider = new ExcaliDashProvider();
 
@@ -175,7 +177,9 @@ const isOwnElement = (el) => el?.customData?.source === MCP_SOURCE;
 async function pushElements(boardId, newElements, mode = "append", opts = {}) {
   // Conversion is the expensive part and does not depend on the board, so it
   // happens once even if the write has to be retried.
-  let convertedNew = newElements.length > 0 ? await convert(newElements) : newElements;
+  let convertedNew = opts.alreadyConverted
+    ? stableLabelIds(newElements)
+    : newElements.length > 0 ? await convert(newElements) : newElements;
 
   // Z-order AFTER conversion: arrows behind everything, shapes in middle, text on top.
   // Auto-laid-out graphs already carry a deliberate order — don't reshuffle them.
@@ -244,7 +248,7 @@ async function pushElements(boardId, newElements, mode = "append", opts = {}) {
 // ============================================================
 // MCP Server
 // ============================================================
-const server = new McpServer({ name: "excalidash-mcp", version: "2.0.0" });
+const server = new McpServer({ name: "excalidash-mcp", version: packageMetadata.version });
 
 // ============================================================
 // read_me — Element format cheat sheet
@@ -253,9 +257,18 @@ const CHEAT_SHEET = `# ExcaliDash Drawing Guide
 
 ## Which tool?
 
-**draw_graph — use this for anything made of boxes and arrows.** Architectures, flows, pipelines,
-state machines, org charts. You describe only the structure; the layout engine positions everything,
-sizes boxes to their labels, keeps arrows out of unrelated boxes and reserves room for edge labels.
+**draw_mermaid — start here for structured diagrams.** Architectures, flows, pipelines, sequence,
+class, state and entity-relationship diagrams. Mermaid gives language models a familiar, expressive
+format and Excalidraw's official converter produces native, editable elements with automatic layout.
+
+\`\`\`mermaid
+flowchart LR
+  Client -->|HTTPS| API
+  API --> Database[(Database)]
+\`\`\`
+
+**draw_graph — use this for small node/edge diagrams.** It is a compact alternative when Mermaid's
+extra syntax is unnecessary. You describe only the structure; the layout engine positions everything.
 
 \`\`\`
 direction LR                      # LR, TB (default), RL, BT
@@ -616,6 +629,37 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
       : "";
     return { content: [{ type: "text", text: `Drew ${parsed.nodes.length} nodes, ${parsed.edges.length - unknown.length} edges (${parsed.direction}). ${r.url}${warn}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
+server.registerTool("draw_mermaid", {
+  description: `Convert Mermaid source with Excalidraw's official converter and draw it as native,
+editable Excalidraw elements. Prefer this for architectures, flows, sequence diagrams, class
+diagrams, state diagrams and ER diagrams. The Mermaid source is processed locally and no screenshot
+is used. Unsupported Mermaid diagram types are refused instead of being inserted as a flat image.
+
+Use mode=replace to redraw what this server drew before while preserving hand-drawn annotations.
+Use mode=append to add another diagram, or mode=wipe only when the entire board should be cleared.`,
+  inputSchema: z.object({
+    board_id: z.string(),
+    mermaid: z.string().min(1).max(50000).describe("Mermaid diagram source, including its diagram type declaration"),
+    mode: z.enum(["append", "replace", "wipe"]).optional().describe("Default: replace"),
+  }),
+}, async ({ board_id, mermaid, mode }) => {
+  try {
+    const writeMode = mode || "replace";
+    const converted = await editableMermaidElements(mermaid);
+    const elements = writeMode === "append" ? converted : stableMermaidIds(converted);
+    const r = await pushElements(board_id, elements, writeMode, {
+      alreadyConverted: true,
+      preLaidOut: true,
+    });
+    return { content: [{ type: "text", text: `Drew Mermaid diagram as ${r.added} editable elements. ${r.url}` }] };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `Mermaid syntax or conversion error: ${mermaidErrorMessage(err)} Nothing was written.` }],
+      isError: true,
+    };
+  }
 });
 
 // ============================================================

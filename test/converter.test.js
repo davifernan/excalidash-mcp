@@ -2,9 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   closeConverter,
+  convertMermaid,
   converterDiagnostics,
   measureStrings,
 } from "../src/converter.js";
+import { MERMAID_CONFIG } from "../src/mermaid.js";
 
 test("the bundled converter works offline and measures with warmed Excalifont", async (t) => {
   if (process.getuid?.() === 0 && process.env.EXCALIDASH_DISABLE_BROWSER_SANDBOX !== "1") {
@@ -34,6 +36,34 @@ test("the bundled converter works offline and measures with warmed Excalifont", 
     // on a non-root runner where sandboxing does work and treats a skip as a
     // failure. Locally, a machine without user namespaces would otherwise fail
     // every run for a reason that has nothing to do with the code.
+    if (/Operation not permitted|sandbox_host_linux|setsockopt: Operation not permitted|sandboxing failed/i.test(error.message)) {
+      t.skip("this machine cannot start a sandboxed Chromium; the CI job covers it");
+      return;
+    }
+    throw error;
+  } finally {
+    await closeConverter();
+  }
+});
+
+test("the bundled official converter returns editable Mermaid elements offline", async (t) => {
+  if (process.getuid?.() === 0 && process.env.EXCALIDASH_DISABLE_BROWSER_SANDBOX !== "1") {
+    t.skip("Chromium's sandbox intentionally refuses to run as root");
+    return;
+  }
+
+  try {
+    const { elements, files } = await convertMermaid(
+      "flowchart LR\n A[Client] -->|HTTPS| B[API]\n A --> B",
+      MERMAID_CONFIG,
+    );
+    assert.ok(elements.length >= 6);
+    assert.equal(Object.keys(files || {}).length, 0);
+    assert.equal(elements.some((element) => element.type === "image"), false);
+    assert.equal(new Set(elements.map((element) => element.id)).size, elements.length);
+    const diagnostics = await converterDiagnostics();
+    assert.deepEqual(diagnostics.blockedNetworkRequests, []);
+  } catch (error) {
     if (/Operation not permitted|sandbox_host_linux|setsockopt: Operation not permitted|sandboxing failed/i.test(error.message)) {
       t.skip("this machine cannot start a sandboxed Chromium; the CI job covers it");
       return;

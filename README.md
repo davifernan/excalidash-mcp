@@ -16,16 +16,17 @@ Diagrams appear live in every browser that has the board open, with no refresh n
 
 ## Why
 
-Ask a language model for a diagram and it has to invent pixel coordinates. It is bad at that, and the
-result shows: arrows cut through boxes, labels hide underneath them, text overflows its container.
+Ask a language model for a diagram and it should describe relationships, not invent pixel coordinates.
+Models already write Mermaid well, and Excalidraw's official converter turns that Mermaid into native,
+editable whiteboard elements with its layout intact.
 
-So don't ask it to. Describe the **structure**, meaning nodes and edges, and let a layout engine do
-the geometry. Same graph, both ways:
+For simple node/edge graphs the MCP also includes a compact graph DSL. Both paths keep geometry out
+of the prompt:
 
-| ❌ Model picks coordinates | ✅ Model picks structure |
+| ❌ Model picks coordinates | ✅ Model writes Mermaid or graph structure |
 |---|---|
 | ![](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/00-before-manual-coordinates.png) | ![](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/01-after-auto-layout.png) |
-| Arrows through boxes, labels clipped | `draw_graph` + dagre |
+| Arrows through boxes, labels clipped | `draw_mermaid` or `draw_graph` |
 
 ## Installation
 
@@ -125,7 +126,27 @@ Add this to `~/.cursor/mcp.json`, then reload Cursor:
 
 ## Drawing
 
-Ask for a diagram in plain language and the agent writes the DSL. This is what it writes:
+Ask for a structured diagram in plain language and the agent writes Mermaid. For example:
+
+```mermaid
+flowchart LR
+  Client[Web App] -->|HTTPS| API[API Gateway]
+  API --> Orders[Order Service]
+  Orders --> DB[(Postgres)]
+  Orders -->|OrderCreated| Bus[Event Bus]
+  Bus --> Payments[Payment Service]
+  Bus --> Shipping[Shipping Service]
+  Bus --> Mail[Notification Service]
+  Payments -->|PaymentSettled| Bus
+```
+
+The `draw_mermaid` tool uses the official
+[`@excalidraw/mermaid-to-excalidraw`](https://www.npmjs.com/package/@excalidraw/mermaid-to-excalidraw)
+converter locally. Flowcharts, sequence diagrams, class diagrams, state diagrams and ER diagrams
+become individual Excalidraw shapes, arrows and labels — not screenshots. The source and credentials
+never leave the MCP process.
+
+For a small graph, the compact built-in DSL remains available:
 
 ```
 direction LR
@@ -188,7 +209,8 @@ skips the lookup entirely.
 
 | Tool | What it does |
 |------|--------------|
-| `draw_graph` | Node/edge diagram with automatic layout. **Start here.** |
+| `draw_mermaid` | Mermaid to native, editable Excalidraw elements. **Start here.** |
+| `draw_graph` | Compact node/edge diagram with automatic layout |
 | `draw_scene` | Place elements at absolute coordinates |
 | `read_me` | Format cheat sheet; the agent calls this once before drawing |
 | `list_boards` · `create_board` · `read_board` | Board management |

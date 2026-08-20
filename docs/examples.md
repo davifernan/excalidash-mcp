@@ -1,7 +1,24 @@
 # Examples
 
-Each diagram below is the exact output of the DSL shown with it, drawn by `draw_graph` and exported
-with `export_png`. Copy a block, change the labels, and you have your own.
+Start with Mermaid for new structured diagrams. `draw_mermaid` converts it to native, editable
+Excalidraw elements:
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Web
+  participant API
+  participant Database
+  User->>Web: Submit order
+  Web->>API: POST /orders
+  API->>Database: Insert order
+  Database-->>API: Order id
+  API-->>Web: 201 Created
+  Web-->>User: Confirmation
+```
+
+The examples below document the smaller graph DSL retained for quick node/edge diagrams. Each is
+the exact output of the block shown, drawn by `draw_graph` and exported with `export_png`.
 
 ## Left to right: a service graph
 

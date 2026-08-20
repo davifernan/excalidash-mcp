@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 - 2026-08-20
+
+- Add `draw_mermaid`, backed by Excalidraw's official Mermaid converter, for native editable
+  flowcharts, sequence diagrams, class diagrams, state diagrams and ER diagrams.
+- Keep Mermaid conversion fully local and offline, reject syntax errors without changing the board,
+  and refuse image-only fallbacks so generated diagrams remain editable.
+- Preserve Dagre edge routes in the compact `draw_graph` renderer and separate reciprocal arrows.
+
 All notable changes to this project are documented here.
 
 ## 1.0.0 - 2026-08-20

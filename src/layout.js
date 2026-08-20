@@ -72,8 +72,6 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
     };
   }
 
-  clearArrowCorridors(sized, edges, direction);
-
   const elements = [];
   for (const [id, node] of sized) {
     if (!node.box) continue;
@@ -110,6 +108,12 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
     pairCount.set(k, (pairCount.get(k) || 0) + 1);
   }
   const pairSeen = new Map();
+  const directed = new Set(edges.map((e) => `${e.from}\0${e.to}`));
+  const reciprocalPairs = new Set(
+    edges
+      .filter((e) => e.from !== e.to && directed.has(`${e.to}\0${e.from}`))
+      .map((e) => pairKey(e.from, e.to)),
+  );
 
   edges.forEach((e, i) => {
     const from = sized.get(e.from);
@@ -121,38 +125,25 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
       return;
     }
 
-    const fc = centre(from.box);
-    const tc = centre(to.box);
-    let start = edgePoint(from.box, tc.x, tc.y);
-    let end = edgePoint(to.box, fc.x, fc.y);
-
-    // Put the breathing room into the points themselves. Leaving it to the
-    // binding's gap makes Excalidraw re-project the endpoint after the arrowhead
-    // has been placed, which shows up as a kinked, doubled-looking tip.
-    const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-    const ux = (end.x - start.x) / len, uy = (end.y - start.y) / len;
-    const AIR = 8;
-    start = { x: start.x + ux * AIR, y: start.y + uy * AIR };
-    end = { x: end.x - ux * AIR, y: end.y - uy * AIR };
-
-    // Fan parallel edges apart: bow each one sideways by a different amount so
-    // their midpoints — and therefore their labels — no longer coincide.
+    // Dagre has already routed every edge around nodes and assigned separate
+    // lanes to parallel and reversing edges. The old renderer discarded that
+    // route and drew a straight chord between the boxes. That looked acceptable
+    // for a pipeline, but cycles turned into long diagonals that crossed the
+    // whole diagram. Preserve Dagre's route and only fall back to a direct line
+    // if the layout engine did not return one.
     const key = pairKey(e.from, e.to);
     const total = pairCount.get(key) || 1;
+    const isSimpleReciprocal = total === 2 && reciprocalPairs.has(key);
+    const geometry = g.edge({ v: e.from, w: e.to, name: `e${i}` });
+    const absolute = isSimpleReciprocal
+      ? reciprocalRoute(from, to)
+      : geometry?.points?.length >= 2
+        ? geometry.points
+        : directRoute(from.box, to.box);
+    const { start, end, points } = excalidrawRoute(absolute);
+
     const nth = pairSeen.get(key) || 0;
     pairSeen.set(key, nth + 1);
-
-    const points = [[0, 0]];
-    if (total > 1) {
-      const spread = 34;
-      // The perpendicular flips with the arrow's direction, so two opposing
-      // edges given mirrored offsets end up bowing to the same side and drawn
-      // on top of each other. Measuring from a fixed end of the pair keeps them
-      // apart.
-      const offset = (nth - (total - 1) / 2) * spread * (e.from > e.to ? -1 : 1);
-      points.push([(end.x - start.x) / 2 - uy * offset, (end.y - start.y) / 2 + ux * offset]);
-    }
-    points.push([end.x - start.x, end.y - start.y]);
 
     const arrow = {
       type: "arrow",
@@ -165,6 +156,7 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
       strokeWidth: 2,
       strokeStyle: e.style || "solid",
       roughness: 0,
+      ...(points.length > 2 ? { roundness: { type: 2 } } : {}),
       endArrowhead: "arrow",
       startArrowhead: null,
       // Referencing the shapes by id is what actually binds them: the library
@@ -178,21 +170,13 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
       // A bound label is nicest: Excalidraw breaks the line around the text.
       arrow.label = { text: e.label, fontSize: 14, strokeColor: "#495057" };
     } else if (e.label) {
-      // Bound labels always sit at the arrow's midpoint, so parallel edges would
-      // stack their labels regardless of how far apart the arrows bow. Place
-      // these ones manually: staggered along the edge and offset to one side.
+      // Dagre reserves a distinct label position for every parallel lane.
+      // Bound labels would all be forced back to the geometric midpoint, so
+      // place these at the reserved positions instead.
       const LABEL_SIZE = 14;
-      let t = total === 2 ? (nth === 0 ? 0.30 : 0.70) : 0.25 + (0.5 * nth) / Math.max(1, total - 1);
-      let side = nth % 2 === 0 ? 1 : -1;
-
-      // Opposing edges run in opposite directions, so a fraction along one arrow
-      // and the same fraction along the other end up in the same place. Measure
-      // from a fixed end of the pair instead.
-      if (e.from > e.to) { t = 1 - t; side = -side; }
-
-      const off = 18 * side;
-      const px = start.x + (end.x - start.x) * t - uy * off;
-      const py = start.y + (end.y - start.y) * t + ux * off;
+      const fallback = pointAlongRoute(absolute, (nth + 1) / (total + 1));
+      const px = !isSimpleReciprocal && Number.isFinite(geometry?.x) ? geometry.x : fallback.x;
+      const py = !isSimpleReciprocal && Number.isFinite(geometry?.y) ? geometry.y : fallback.y;
       elements.push({
         type: "text",
         id: `${arrow.id}-label`,
@@ -230,6 +214,102 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
   const arrows = elements.filter(e => e.type === "arrow");
   const rest = elements.filter(e => e.type !== "arrow");
   return [...arrows, ...rest];
+}
+
+const ARROW_AIR = 8;
+
+/** A direct boundary-to-boundary route used only when Dagre has no edge path. */
+function directRoute(fromBox, toBox) {
+  const fc = centre(fromBox);
+  const tc = centre(toBox);
+  return [edgePoint(fromBox, tc.x, tc.y), edgePoint(toBox, fc.x, fc.y)];
+}
+
+/**
+ * Give the two directions of a reciprocal relationship opposite sides of the
+ * same visual corridor. This reads as a deliberate two-way exchange instead
+ * of one straight arrow plus one enormous Dagre back-edge around the graph.
+ */
+function reciprocalRoute(from, to) {
+  const fc = centre(from.box);
+  const tc = centre(to.box);
+  const start = edgePoint(from.box, tc.x, tc.y);
+  const end = edgePoint(to.box, fc.x, fc.y);
+
+  const canonicalForward = from.id < to.id;
+  const a = canonicalForward ? fc : tc;
+  const b = canonicalForward ? tc : fc;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const side = canonicalForward ? 1 : -1;
+  const BOW = 58;
+  return [
+    start,
+    {
+      x: (start.x + end.x) / 2 + (-dy / length) * BOW * side,
+      y: (start.y + end.y) / 2 + (dx / length) * BOW * side,
+    },
+    end,
+  ];
+}
+
+/**
+ * Convert Dagre's absolute path into Excalidraw's first-point-relative format.
+ * The ends are inset along their own first/last segments, which keeps the
+ * arrowhead clear of the box without introducing the doubled tip that a
+ * binding gap creates on a bent arrow.
+ */
+export function excalidrawRoute(route, air = ARROW_AIR) {
+  if (!Array.isArray(route) || route.length < 2) {
+    throw new Error("An edge route needs at least two points.");
+  }
+
+  const clean = route
+    .map(({ x, y }) => ({ x: Number(x), y: Number(y) }))
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .filter((point, index, all) => index === 0 || point.x !== all[index - 1].x || point.y !== all[index - 1].y);
+  if (clean.length < 2) throw new Error("An edge route needs two distinct finite points.");
+
+  const start = towards(clean[0], clean[1], air);
+  const last = clean.length - 1;
+  const end = towards(clean[last], clean[last - 1], air);
+  const absolute = [start, ...clean.slice(1, -1), end];
+  return {
+    start,
+    end,
+    points: absolute.map((point) => [point.x - start.x, point.y - start.y]),
+  };
+}
+
+function towards(from, to, distance) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const amount = Math.min(Math.max(0, distance), length / 2);
+  return { x: from.x + (dx / length) * amount, y: from.y + (dy / length) * amount };
+}
+
+/** Point at fraction `t` of a polyline's total length. */
+function pointAlongRoute(route, t) {
+  const segments = route.slice(1).map((point, index) => ({
+    from: route[index],
+    to: point,
+    length: Math.hypot(point.x - route[index].x, point.y - route[index].y),
+  }));
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0) || 1;
+  let remaining = total * Math.max(0, Math.min(1, t));
+  for (const segment of segments) {
+    if (remaining <= segment.length) {
+      const fraction = segment.length ? remaining / segment.length : 0;
+      return {
+        x: segment.from.x + (segment.to.x - segment.from.x) * fraction,
+        y: segment.from.y + (segment.to.y - segment.from.y) * fraction,
+      };
+    }
+    remaining -= segment.length;
+  }
+  return route.at(-1);
 }
 
 

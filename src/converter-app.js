@@ -1,7 +1,18 @@
 import { convertToExcalidrawElements, exportToCanvas } from "@excalidraw/excalidraw";
+import { parseMermaidToExcalidraw } from "@excalidraw/mermaid-to-excalidraw";
 
 window.convertToExcalidrawElements = convertToExcalidrawElements;
 window.exportToCanvas = exportToCanvas;
+window.parseMermaidToExcalidraw = async (definition, config) => {
+  const { elements, files = {} } = await parseMermaidToExcalidraw(definition, config);
+  return {
+    // This is the same finalisation step used by Excalidraw's own Mermaid
+    // dialog. Regenerating ids also works around duplicate edge ids produced
+    // by some valid Mermaid graphs with parallel connections.
+    elements: convertToExcalidrawElements(elements, { regenerateIds: true }),
+    files,
+  };
+};
 
 const measurementContext = document.createElement("canvas").getContext("2d");
 const fontOf = (size, family) => `${size}px ${family || "Excalifont"}`;

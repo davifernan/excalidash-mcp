@@ -1,6 +1,6 @@
 {
   "name": "excalidash-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server for live drawing on ExcaliDash — with Socket.IO live updates",
   "type": "module",
   "bin": {
@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@excalidraw/excalidraw": "0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "2.2.2",
     "esbuild": "0.25.12",
     "react": "19.1.0",
     "react-dom": "19.1.0"
