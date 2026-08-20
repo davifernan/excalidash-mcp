@@ -4,6 +4,7 @@
  */
 import { fileURLToPath } from "url";
 import { dirname, resolve } from "path";
+import { browserLaunchOptions } from "./browser.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -12,6 +13,7 @@ const HTML_PATH = resolve(__dirname, "converter.html");
 let _browser = null;
 let _page = null;
 let _opening = null;
+const _blockedNetworkRequests = [];
 
 /**
  * The shared converter page, opened at most once.
@@ -30,12 +32,20 @@ async function getPage() {
 async function openPage() {
   const { chromium } = await import("playwright");
   if (!_browser?.isConnected()) {
-    _browser = await chromium.launch({ args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+    _browser = await chromium.launch(browserLaunchOptions());
   }
   // Kept local until it is actually usable, so a failure leaves nothing behind
   // for the next call to trip over.
   const page = await _browser.newPage();
   try {
+    // The converter is a closed local document. If a bundled dependency ever
+    // starts reaching for a CDN, fail closed and make the attempt observable
+    // to the offline integration test instead of silently reintroducing a
+    // runtime dependency on third-party code.
+    await page.route(/^https?:\/\//, async (route) => {
+      _blockedNetworkRequests.push(route.request().url());
+      await route.abort("blockedbyclient");
+    });
     await page.goto(`file://${HTML_PATH}`, { waitUntil: "networkidle", timeout: 30000 });
     await page.waitForFunction("window.__READY__ === true", { timeout: 15000 });
     await warmUpFonts(page);
@@ -138,6 +148,16 @@ export async function measureStrings(strings, fontSize, family) {
   );
 }
 
+/** Test and support diagnostics for the local converter page. */
+export async function converterDiagnostics() {
+  const page = await getPage();
+  return {
+    blockedNetworkRequests: [..._blockedNetworkRequests],
+    fonts: await page.evaluate(() => window.__FONTS_AFTER_WARMUP__ || []),
+    excalifontReady: await page.evaluate(() => document.fonts.check("20px Excalifont", "m")),
+  };
+}
+
 /** Release the headless browser held for conversions. */
 export async function closeConverter() {
   const browser = _browser;
@@ -145,4 +165,3 @@ export async function closeConverter() {
   _browser = null;
   if (browser?.isConnected()) await browser.close().catch(() => {});
 }
-

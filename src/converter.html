@@ -1,83 +1,10 @@
 <!DOCTYPE html>
 <html>
 <head>
-<script type="module">
-import { convertToExcalidrawElements, exportToCanvas } from "https://esm.sh/@excalidraw/excalidraw@0.18.0?bundle";
-window.convertToExcalidrawElements = convertToExcalidrawElements;
-window.exportToCanvas = exportToCanvas;
-
-
-/**
- * Text measurement against the real face.
- *
- * layout.js used to estimate label widths from a characters-times-0.58 rule,
- * which is how boxes ended up too narrow and Excalidraw broke words in the
- * middle. This measures with the same font the export draws with, and does the
- * line breaking here so the caller can grow a box that is too small for a word
- * it cannot break.
- */
-const _mctx = document.createElement("canvas").getContext("2d");
-const _fontOf = (size, family) => `${size}px ${family || "Excalifont"}`;
-
-/**
- * Excalidraw ships its faces split by unicode range and loads each piece only
- * when a glyph from it is drawn. Asking for the ranges this very text needs
- * keeps a label full of unusual characters from being measured against the
- * fallback face.
- */
-const _ensureLoaded = async (font, text) => {
-  try { await document.fonts.load(font, text); } catch { /* fallback is still measurable */ }
-};
-
-window.measureStrings = async (strings, fontSize, family) => {
-  const font = _fontOf(fontSize, family);
-  await _ensureLoaded(font, strings.join(""));
-  _mctx.font = font;
-  return strings.map((s) => _mctx.measureText(s).width);
-};
-
-/**
- * Break every label in one round trip.
- *
- * A page.evaluate() per node would pay the round trip for each box in the
- * graph; the whole batch costs one.
- */
-
-window.layoutLabels = async (items) => {
-  const all = items.map((i) => String(i.text)).join("");
-  await Promise.all([...new Set(items.map((i) => _fontOf(i.fontSize, i.family)))]
-    .map((f) => _ensureLoaded(f, all)));
-
-  return items.map(({ text, fontSize, maxTextWidth, family }) => {
-    _mctx.font = _fontOf(fontSize, family);
-    const w = (s) => _mctx.measureText(s).width;
-
-    const lines = [];
-    let widestWord = 0;   // a box narrower than this breaks a word in the middle
-    for (const paragraph of String(text).split("\n")) {
-      const words = paragraph.split(/\s+/).filter(Boolean);
-      if (!words.length) { lines.push(""); continue; }
-      let line = "";
-      for (const word of words) {
-        widestWord = Math.max(widestWord, w(word));
-        const candidate = line ? `${line} ${word}` : word;
-        if (line && w(candidate) > maxTextWidth) {
-          lines.push(line);
-          line = word;
-        } else {
-          line = candidate;
-        }
-      }
-      lines.push(line);
-    }
-    const width = lines.reduce((m, l) => Math.max(m, w(l)), 0);
-    return { lines, width, widestWord };
-  });
-};
-
-window.__FONTS__ = [...document.fonts].map((f) => `${f.family}:${f.status}`);
-window.__READY__ = true;
+<script>
+window.EXCALIDRAW_ASSET_PATH = new URL("../dist/", window.location.href).href;
 </script>
+<script src="../dist/converter.bundle.js"></script>
 </head>
 <body></body>
 </html>

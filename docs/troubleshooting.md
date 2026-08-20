@@ -84,7 +84,13 @@ A path prefix on `EXCALIDASH_BACKEND_URL` is carried into the Socket.IO path aut
 The headless browser isn't installed:
 
 ```bash
-npx playwright install chromium
+npx -y excalidash-mcp setup-browser
+```
+
+On a minimal Linux server or container, install the required operating-system libraries too:
+
+```bash
+npx -y excalidash-mcp setup-browser --with-deps
 ```
 
 ## Diagrams look messy
