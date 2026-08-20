@@ -104,6 +104,21 @@ export async function convertElements(simplifiedElements) {
 }
 
 /**
+ * Convert Mermaid source with Excalidraw's official Mermaid converter.
+ *
+ * The library requires a DOM, so it runs inside the same closed, local browser
+ * page as the regular element converter. The page blocks every HTTP request;
+ * Mermaid definitions and ExcaliDash credentials never leave this process.
+ */
+export async function convertMermaid(definition, config = {}) {
+  const page = await getPage();
+  return page.evaluate(
+    ({ definition, config }) => window.parseMermaidToExcalidraw(definition, config),
+    { definition, config },
+  );
+}
+
+/**
  * Render elements to a PNG data URL using Excalidraw's own export.
  *
  * Screenshotting the editor means fighting its viewport: the drawing sits

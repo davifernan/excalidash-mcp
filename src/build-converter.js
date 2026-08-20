@@ -24,9 +24,6 @@ await build({
   platform: "browser",
   target: "chrome120",
   minify: true,
-  alias: {
-    "@mermaid-js/parser": resolve(here, "unused-mermaid-parser.js"),
-  },
   define: {
     "process.env.NODE_ENV": '"production"',
   },

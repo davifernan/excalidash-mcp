@@ -5,12 +5,25 @@ description: Draw good boxes-and-arrows diagrams with the excalidash MCP. Use wh
 
 # Drawing diagrams that hold up
 
-## Use `draw_graph`, not `draw_scene`
+## Start with `draw_mermaid`
 
 `draw_scene` wants pixel coordinates. Placing boxes by coordinate is the thing models are worst at,
 and it shows: overlapping boxes, arrows through unrelated shapes, captions on top of things.
 
-`draw_graph` takes structure only and derives every position:
+Use `draw_mermaid` for architectures, flows, sequences, class diagrams, state machines and ER
+diagrams. It uses Excalidraw's official converter and produces native, editable elements:
+
+```mermaid
+flowchart LR
+  API[Payments API] -->|authorize| PSP[Provider]
+  API --> DB[(Ledger)]
+```
+
+Mermaid is processed locally. Supported editable forms are `flowchart`, `sequenceDiagram`,
+`classDiagram`, `stateDiagram` and `erDiagram`. Other Mermaid types may only have a flat image
+representation; the MCP refuses those instead of silently creating a non-editable board.
+
+`draw_graph` remains a compact option for a small node/edge graph:
 
 ```
 direction LR
@@ -39,11 +52,20 @@ Two rules, both about the same thing:
 
 ## Pick the direction from the shape of the graph
 
-`LR` for pipelines and request flows, `TB` for hierarchies, trees and decision flows. Getting it
-wrong gives you a diagram that is 4000px in one dimension and 300 in the other. If it comes out
-extreme, flip the direction and redraw.
+`flowchart LR` for pipelines and request flows, `flowchart TB` for hierarchies, trees and decision
+flows. The compact graph DSL uses `direction LR` and `direction TB`. If a diagram comes out extreme,
+flip the direction and redraw.
 
-## Known rough edges
+## Mermaid constraints
+
+- Avoid duplicate identical edges between the same two nodes when one labelled edge communicates
+  the relationship more clearly.
+- Keep subgraphs modest. If the upstream converter cannot preserve a diagram as editable elements,
+  `draw_mermaid` returns an error and leaves the board untouched.
+- Mermaid does layout, not semantic editing. To make a structural change, edit the Mermaid source
+  and call `draw_mermaid` again with `mode=replace`.
+
+## Compact graph DSL constraints
 
 - **A shortcut past the middle of a chain.** With `a -> b -> c` and also `a -> c`, the shortcut has
   to get past `b`. The arrow stays straight and `b` steps aside instead, which widens the drawing.
@@ -59,7 +81,7 @@ extreme, flip the direction and redraw.
 
 ## Two footguns
 
-- `draw_graph` defaults to `mode=replace`, which clears only the elements this server drew before — anything drawn by hand stays. Pass `mode=append` to add without clearing, or `mode=wipe` to empty the board completely.
+- `draw_mermaid` and `draw_graph` default to `mode=replace`, which clears only the elements this server drew before — anything drawn by hand stays. Pass `mode=append` to add without clearing, or `mode=wipe` to empty the board completely.
 - Give every element an id in `draw_scene` (`rect frontend 100,100 ...`). Without one you cannot
   `update_element` or `delete_elements` later without redrawing everything.
 
