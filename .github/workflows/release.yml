@@ -29,11 +29,13 @@ jobs:
       - run: npm ci
       - run: npm audit
       - run: npx playwright install --with-deps chromium
-      # The bundled-converter test skips itself on a machine that cannot start a
-      # sandboxed Chromium. That is right for a laptop and wrong here: this is
-      # the run that has to actually prove the offline bundle and the font
-      # warm-up work, and a skip would pass unnoticed in the summary line.
+      # GitHub-hosted runners do not expose the kernel sandbox features required
+      # by Chromium. Disable it for this isolated CI process so the integration
+      # test still proves the offline bundle and font warm-up instead of silently
+      # skipping. Production keeps the sandbox enabled by default.
       - name: Run tests, and refuse a silent skip of the converter test
+        env:
+          EXCALIDASH_DISABLE_BROWSER_SANDBOX: "1"
         run: |
           set -o pipefail
           npm test 2>&1 | tee test-output.txt
