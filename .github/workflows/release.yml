@@ -1,0 +1,64 @@
+name: Release npm package
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: Test and inspect package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Match tag to package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node -e 'const expected=`v${require("./package.json").version}`; if(process.env.TAG!==expected) throw new Error(`Tag ${process.env.TAG} does not match ${expected}`)'
+      - run: npm install
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - name: Verify generated bundle is current
+        run: |
+          npm run build
+          git diff --exit-code -- dist
+      - name: Pack and reject non-runtime files
+        run: |
+          npm pack --json > pack-result.json
+          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("pack-result.json"))[0]; const bad=p.files.map(f=>f.path).filter(f=>/^(assets|docs|skills|test)\//.test(f)); if(bad.length) throw new Error(`Unexpected files: ${bad.join(", ")}`); console.error(`${p.filename}: ${p.entryCount} files, ${p.size} bytes`);'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: "excalidash-mcp-*.tgz"
+
+  publish:
+    name: Publish with provenance
+    needs: pack
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm publish excalidash-mcp-*.tgz --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

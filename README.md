@@ -1,16 +1,17 @@
 # excalidash-mcp
 
-**Let your AI coding agent draw on your whiteboard.** Works with Claude Code, Cursor, Codex or any
-other tool that speaks MCP. It turns a description of a diagram into real Excalidraw elements on your
-self-hosted [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash), and they appear live in every
-browser that has the board open. No refresh needed.
+**Let your AI coding agent draw on your self-hosted ExcaliDash whiteboard.** This package is an MCP
+client for a running [ExcaliDash](https://github.com/ZimengXiong/ExcaliDash) instance; it is not a
+general-purpose MCP server for excalidraw.com or arbitrary Excalidraw files. It is tested against
+ExcaliDash v0.5.1 and works with Claude Desktop, Claude Code, Cursor, Codex, and other MCP clients.
+Diagrams appear live in every browser that has the board open, with no refresh needed.
 
-![Order processing diagram drawn by the MCP server](assets/02-order-processing.png)
+![Order processing diagram drawn by the MCP server](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/02-order-processing.png)
 
 <sub>Eight nodes and eight edges, written as plain text. No coordinates by hand.</sub>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A518-black.svg)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-black.svg)](https://nodejs.org)
 [![MCP](https://img.shields.io/badge/MCP-server-black.svg)](https://modelcontextprotocol.io)
 
 ## Why
@@ -23,27 +24,74 @@ the geometry. Same graph, both ways:
 
 | ❌ Model picks coordinates | ✅ Model picks structure |
 |---|---|
-| ![](assets/00-before-manual-coordinates.png) | ![](assets/01-after-auto-layout.png) |
+| ![](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/00-before-manual-coordinates.png) | ![](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/01-after-auto-layout.png) |
 | Arrows through boxes, labels clipped | `draw_graph` + dagre |
 
-## Quick start
+## Installation
 
-You need a running ExcaliDash instance and a user account for the agent to draw as.
+You need Node.js 22 or newer, a running ExcaliDash instance, and an ExcaliDash user account for the
+agent. Install the matching Chromium build once; package installation deliberately does not download
+a browser behind your back:
 
 ```bash
-git clone https://github.com/davifernan/excalidash-mcp.git
-cd excalidash-mcp && npm install
+npx excalidash-mcp setup-browser
 ```
 
-Add it to your MCP client. This is `~/.mcp.json` for Claude Code; Cursor, Codex and the rest use the
-same shape in their own config file:
+When a later package update needs a different Chromium revision, startup stops with this same command
+instead of failing with an internal Playwright error.
+
+Chromium's process sandbox is enabled by default. Run the server as a non-root user, including in
+containers. Only when that is impossible, `EXCALIDASH_DISABLE_BROWSER_SANDBOX=1` disables the
+sandbox; the server prints a security warning because browser compromise could then expose its
+ExcaliDash credentials and host access.
+
+The examples use an API key. Create one under **Profile → API keys** in ExcaliDash. Email and password
+are also supported: replace `EXCALIDASH_API_KEY` with both `EXCALIDASH_EMAIL` and
+`EXCALIDASH_PASSWORD`.
+
+### Claude Desktop
+
+Add this server to the `mcpServers` object in your Claude Desktop configuration, then restart Claude
+Desktop:
 
 ```json
 {
   "mcpServers": {
     "excalidash": {
-      "command": "node",
-      "args": ["/path/to/excalidash-mcp/src/index.js"],
+      "command": "npx",
+      "args": ["-y", "excalidash-mcp"],
+      "env": {
+        "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
+        "EXCALIDASH_URL": "https://draw.example.com",
+        "EXCALIDASH_API_KEY": "exd_..."
+      }
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add --scope user excalidash \
+  --env EXCALIDASH_BACKEND_URL=https://draw.example.com/api \
+  --env EXCALIDASH_URL=https://draw.example.com \
+  --env EXCALIDASH_API_KEY=exd_... \
+  -- npx -y excalidash-mcp
+```
+
+Verify it with `claude mcp get excalidash`.
+
+### Cursor
+
+Add this to `~/.cursor/mcp.json`, then reload Cursor:
+
+```json
+{
+  "mcpServers": {
+    "excalidash": {
+      "command": "npx",
+      "args": ["-y", "excalidash-mcp"],
       "env": {
         "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
         "EXCALIDASH_URL": "https://draw.example.com",
@@ -55,7 +103,7 @@ same shape in their own config file:
 ```
 
 > [!TIP]
-> Create the key in ExcaliDash under **Profile → API keys**. It is shown once, right after you
+> The key is shown once, right after you
 > create it. Give it the `drawings:history` and `drawings:share` scopes if you want the agent to
 > read version history or manage sharing; the defaults cover drawing and collection work.
 >
@@ -65,7 +113,7 @@ same shape in their own config file:
 > [!TIP]
 > Point `EXCALIDASH_BACKEND_URL` at your instance's **`/api`** path. The ExcaliDash frontend proxies
 > it to the backend already, so no custom Nginx config and no exposed ports are needed.
-> See [docs/setup.md](docs/setup.md) for the details and the same-host alternative.
+> See [the setup guide](https://github.com/davifernan/excalidash-mcp/blob/main/docs/setup.md) for the details and the same-host alternative.
 
 ## Drawing
 
@@ -93,7 +141,7 @@ edge stage -> prod 'manual approve'
 edge prod -> roll 'on error' color=red style=dashed
 ```
 
-![Deploy pipeline diagram](assets/03-deploy-pipeline.png)
+![Deploy pipeline diagram](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/03-deploy-pipeline.png)
 
 Boxes are sized to fit their labels, long labels wrap, edge labels get their own space, and parallel
 edges fan apart instead of stacking. **Directions:** `LR`, `TB`, `RL`, `BT` · **Shapes:** `rect`,
@@ -101,7 +149,7 @@ edges fan apart instead of stacking. **Directions:** `LR`, `TB`, `RL`, `BT` · *
 `pink`, `gray`, or any hex code.
 
 For annotations, legends and free-form sketches there is a second DSL that takes absolute
-coordinates. See [docs/scene-dsl.md](docs/scene-dsl.md).
+coordinates. See [the scene DSL reference](https://github.com/davifernan/excalidash-mcp/blob/main/docs/scene-dsl.md).
 
 ## Sharing
 
@@ -147,7 +195,7 @@ Any current version has it.
 
 ## How it works
 
-![Architecture: agent to MCP server to ExcaliDash to browser](assets/how-it-works.png)
+![Architecture: agent to MCP server to ExcaliDash to browser](https://raw.githubusercontent.com/davifernan/excalidash-mcp/main/assets/how-it-works.png)
 
 The server pushes over Socket.IO **and** persists over REST, which is why elements show up in an open
 board immediately and still survive a reload. Every diagram in this README was drawn by the server
@@ -155,11 +203,11 @@ itself and exported with `export_png`.
 
 ## Docs
 
-- [Diagramming skill](skills/diagramming/SKILL.md): what to do and what to avoid, for agents that draw
-- [Examples](docs/examples.md): more diagrams, each with the DSL that produced it
-- [Setup](docs/setup.md): ExcaliDash instance, the `/api` path, environment variables
-- [Scene DSL](docs/scene-dsl.md): manual placement, element reference
-- [Troubleshooting](docs/troubleshooting.md): HTML instead of JSON, redirects, missing live updates,
+- [Diagramming skill](https://github.com/davifernan/excalidash-mcp/blob/main/skills/diagramming/SKILL.md): what to do and what to avoid, for agents that draw
+- [Examples](https://github.com/davifernan/excalidash-mcp/blob/main/docs/examples.md): more diagrams, each with the DSL that produced it
+- [Setup](https://github.com/davifernan/excalidash-mcp/blob/main/docs/setup.md): ExcaliDash instance, the `/api` path, environment variables
+- [Scene DSL](https://github.com/davifernan/excalidash-mcp/blob/main/docs/scene-dsl.md): manual placement, element reference
+- [Troubleshooting](https://github.com/davifernan/excalidash-mcp/blob/main/docs/troubleshooting.md): HTML instead of JSON, redirects, missing live updates,
   a board link that won't open, sign-ins that start failing on their own
 
 ## License

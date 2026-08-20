@@ -24,6 +24,7 @@ import { reviewChanges } from "./elementProps.js";
 import { expandDeletion, severReferences, retargetReferences, reflowDependants } from "./relations.js";
 import { edgePoint, centre } from "./geometry.js";
 import { checkIds } from "./validate.js";
+import { browserLaunchOptions } from "./browser.js";
 
 const provider = new ExcaliDashProvider();
 
@@ -817,7 +818,7 @@ let _browser = null;
 async function getBrowser() {
   if (_browser?.isConnected()) return _browser;
   const { chromium } = await import("playwright");
-  _browser = await chromium.launch({ args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  _browser = await chromium.launch(browserLaunchOptions());
   return _browser;
 }
 
