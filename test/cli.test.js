@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -51,4 +51,21 @@ test("startup names the browser setup command when Chromium is absent", async ()
   assert.equal(result.code, 1);
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /npx excalidash-mcp setup-browser/);
+});
+
+test("install-skill runs without credentials or a browser", async (context) => {
+  const directory = mkdtempSync(`${tmpdir()}/excalidash-cli-skill-test-`);
+  context.after(() => rmSync(directory, { recursive: true, force: true }));
+  const result = await run(["install-skill", "--client", "codex"], {
+    CODEX_HOME: directory,
+    PLAYWRIGHT_BROWSERS_PATH: resolve("test/fixtures/no-browsers-here"),
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /Installed for codex/);
+  assert.equal(
+    existsSync(resolve(directory, "skills/excalidash-diagramming/SKILL.md")),
+    true,
+  );
 });

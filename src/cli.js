@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { assertBrowserInstalled, browserLaunchOptions, installBrowser } from "./browser.js";
+import { installSkill } from "./skill.js";
 
 function credentialError(env = process.env) {
   if (env.EXCALIDASH_API_KEY || (env.EXCALIDASH_EMAIL && env.EXCALIDASH_PASSWORD)) return null;
@@ -23,6 +24,30 @@ async function run() {
       throw new Error("setup-browser only accepts the optional --with-deps flag.");
     }
     await installBrowser({ withDependencies });
+    return;
+  }
+  if (command === "install-skill") {
+    let client = "auto";
+    let force = false;
+    for (let index = 0; index < rest.length; index += 1) {
+      const argument = rest[index];
+      if (argument === "--force") {
+        force = true;
+      } else if (argument === "--client" && rest[index + 1]) {
+        client = rest[index + 1];
+        index += 1;
+      } else {
+        throw new Error(
+          "install-skill accepts --client codex|claude|all and the optional --force flag.",
+        );
+      }
+    }
+    const results = await installSkill({ client, force });
+    for (const result of results) {
+      const verb = result.status === "current" ? "Already current" : "Installed";
+      process.stdout.write(`${verb} for ${result.client}: ${result.target}\n`);
+      if (result.backup) process.stdout.write(`Backup: ${result.backup}\n`);
+    }
     return;
   }
   if (command) throw new Error(`Unknown command: ${command}`);

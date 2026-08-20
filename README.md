@@ -49,6 +49,18 @@ npx -y excalidash-mcp setup-browser --with-deps
 
 The `--with-deps` variant may ask for elevated privileges because it uses the system package manager.
 
+Install the recommended diagramming skill once so Codex or Claude also gets the drawing workflow, not
+just the MCP tools:
+
+```bash
+npx -y excalidash-mcp@1 install-skill
+```
+
+The command installs into every existing Codex or Claude configuration it detects. Choose one
+explicitly with `--client codex` or `--client claude`; `--client all` installs both. An existing,
+modified copy is never overwritten silently. `--force` first moves it to a timestamped backup and
+then installs the packaged version. Restart the agent after installing a skill for the first time.
+
 Chromium's process sandbox is enabled by default. Run the server as a non-root user, including in
 containers. Only when that is impossible, `EXCALIDASH_DISABLE_BROWSER_SANDBOX=1` disables the
 sandbox; the server prints a security warning because browser compromise could then expose its
@@ -233,7 +245,7 @@ itself and exported with `export_png`.
 
 ## Docs
 
-- [Diagramming skill](https://github.com/davifernan/excalidash-mcp/blob/main/skills/diagramming/SKILL.md): what to do and what to avoid, for agents that draw
+- [Diagramming skill](https://github.com/davifernan/excalidash-mcp/blob/main/skills/excalidash-diagramming/SKILL.md): what to do and what to avoid, for agents that draw
 - [Examples](https://github.com/davifernan/excalidash-mcp/blob/main/docs/examples.md): more diagrams, each with the DSL that produced it
 - [Setup](https://github.com/davifernan/excalidash-mcp/blob/main/docs/setup.md): ExcaliDash instance, the `/api` path, environment variables
 - [Scene DSL](https://github.com/davifernan/excalidash-mcp/blob/main/docs/scene-dsl.md): manual placement, element reference

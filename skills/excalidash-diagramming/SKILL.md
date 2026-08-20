@@ -1,6 +1,6 @@
 ---
-name: diagramming
-description: Draw good boxes-and-arrows diagrams with the excalidash MCP. Use when creating an architecture diagram, flow, pipeline, state machine or any node/edge drawing on an ExcaliDash board.
+name: excalidash-diagramming
+description: Draw and edit clear architecture, flow, pipeline, sequence, class, state, ER, and node-edge diagrams on an ExcaliDash board through the excalidash MCP. Use whenever a user wants a structured visual diagram in ExcaliDash.
 ---
 
 # Drawing diagrams that hold up
