@@ -9,6 +9,7 @@ import { z } from "zod/v4";
 import { parseDSL, resolveColor, resolveFill } from "./elements.js";
 import { parseGraphDSL, layoutGraph } from "./layout.js";
 import { ExcaliDashProvider } from "./excalidash.js";
+import { commit as commitToBoard } from "./commit.js";
 import {
   ACCESS_LEVELS,
   MIN_QUERY_LENGTH,
@@ -25,6 +26,9 @@ import { edgePoint, centre } from "./geometry.js";
 import { checkIds } from "./validate.js";
 
 const provider = new ExcaliDashProvider();
+
+/** commit(), with this server's provider already bound in. */
+const commit = (boardId, mutate, opts) => commitToBoard(provider, boardId, mutate, opts);
 
 // ============================================================
 // Convert elements via Excalidraw library (Playwright)
@@ -168,8 +172,8 @@ const stampOwnership = (elements) =>
 const isOwnElement = (el) => el?.customData?.source === MCP_SOURCE;
 
 async function pushElements(boardId, newElements, mode = "append", opts = {}) {
-  await provider.joinRoom(boardId);
-
+  // Conversion is the expensive part and does not depend on the board, so it
+  // happens once even if the write has to be retried.
   let convertedNew = newElements.length > 0 ? await convert(newElements) : newElements;
 
   // Z-order AFTER conversion: arrows behind everything, shapes in middle, text on top.
@@ -177,67 +181,63 @@ async function pushElements(boardId, newElements, mode = "append", opts = {}) {
   if (convertedNew.length > 0 && !opts.preLaidOut) {
     convertedNew = zOrderConverted(convertedNew);
   }
-
-  const existing = await provider.getDrawing(boardId);
-  if (!existing) throw new Error(`Board ${boardId} not found`);
-
-  const existingEls = existing.elements || [];
   convertedNew = stampOwnership(convertedNew);
-  const now = Date.now();
-  let merged, socketElements;
 
-  if (mode === "replace" || mode === "wipe") {
-    // "replace" clears only what this server drew, so hand-drawn work on the
-    // same board survives a redraw. "wipe" is the old behaviour, kept for
-    // boards whose contents predate the marker.
-    const previouslyOwn = mode === "wipe" ? existingEls : existingEls.filter(isOwnElement);
-    const kept = mode === "wipe" ? [] : existingEls.filter((e) => !isOwnElement(e));
+  return commit(boardId, (existingEls) => {
+    const now = Date.now();
 
-    // A redraw reuses the same ids — node "api" stays "api". Writing the new
-    // element and a tombstone for the old one would put two entries with the
-    // same id into the board, and since the tombstone carries the higher
-    // version, collaboration would settle on the deletion. So a reused id is
-    // carried forward as a new version of the same element instead.
-    const priorById = new Map(previouslyOwn.map((e) => [e.id, e]));
-    const clash = convertedNew.find((e) => kept.some((k) => k.id === e.id));
-    if (clash) {
-      throw new Error(
-        `Element id "${clash.id}" is already used by something this server does not own. ` +
-        `Rename the node, or use mode "wipe" to clear the board first.`);
+    if (mode === "replace" || mode === "wipe") {
+      // "replace" clears only what this server drew, so hand-drawn work on the
+      // same board survives a redraw. "wipe" is the old behaviour, kept for
+      // boards whose contents predate the marker.
+      const previouslyOwn = mode === "wipe" ? existingEls : existingEls.filter(isOwnElement);
+      const kept = mode === "wipe" ? [] : existingEls.filter((e) => !isOwnElement(e));
+
+      // A redraw reuses the same ids — node "api" stays "api". Writing the new
+      // element and a tombstone for the old one would put two entries with the
+      // same id into the board, and since the tombstone carries the higher
+      // version, collaboration would settle on the deletion. So a reused id is
+      // carried forward as a new version of the same element instead.
+      const priorById = new Map(previouslyOwn.map((e) => [e.id, e]));
+      const clash = convertedNew.find((e) => kept.some((k) => k.id === e.id));
+      if (clash) {
+        throw new Error(
+          `Element id "${clash.id}" is already used by something this server does not own. ` +
+          `Rename the node, or use mode "wipe" to clear the board first.`);
+      }
+
+      const survivors = convertedNew.map((el) => {
+        const prior = priorById.get(el.id);
+        if (!prior) return el;
+        priorById.delete(el.id);
+        return { ...el, version: Math.max(prior.version || 1, el.version || 1) + 1, updated: now };
+      });
+
+      // Whatever this server drew last time and did not draw again is gone.
+      const deleted = [...priorById.values()].map((e) => ({
+        ...e, isDeleted: true, updated: now,
+        version: (e.version || 1) + 1,
+        versionNonce: Math.floor(Math.random() * 2147483647),
+      }));
+
+      // Array position is z-order. Generated content goes behind anything drawn
+      // by hand: someone who annotates a diagram wants their note on top of it,
+      // not buried under the next redraw.
+      const merged = [...survivors, ...kept, ...deleted];
+      return {
+        elements: merged,
+        live: [...survivors, ...deleted],
+        value: { total: merged.filter((e) => !e.isDeleted).length, added: newElements.length, url: provider.getUrl(boardId) },
+      };
     }
 
-    const survivors = convertedNew.map((el) => {
-      const prior = priorById.get(el.id);
-      if (!prior) return el;
-      priorById.delete(el.id);
-      return { ...el, version: Math.max(prior.version || 1, el.version || 1) + 1, updated: now };
-    });
-
-    // Whatever this server drew last time and did not draw again is gone.
-    const deleted = [...priorById.values()].map((e) => ({
-      ...e, isDeleted: true, updated: now,
-      version: (e.version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
-    }));
-
-    // Array position is z-order. Generated content goes behind anything drawn
-    // by hand: someone who annotates a diagram wants their note on top of it,
-    // not buried under the next redraw.
-    merged = [...survivors, ...kept, ...deleted];
-    socketElements = [...survivors, ...deleted];
-  } else {
-    merged = [...existingEls, ...convertedNew];
-    socketElements = convertedNew;
-  }
-
-  // elementOrder controls z-ordering: first = back, last = front
-  // Only include active (non-deleted) elements, in our z-ordered sequence
-  const elementOrder = merged.filter(e => !e.isDeleted).map(e => e.id);
-  await provider.pushLive(boardId, socketElements, elementOrder);
-  await provider.updateDrawing(boardId, merged);
-
-  const active = merged.filter(e => !e.isDeleted).length;
-  return { total: active, added: newElements.length, url: provider.getUrl(boardId) };
+    const merged = [...existingEls, ...convertedNew];
+    return {
+      elements: merged,
+      live: convertedNew,
+      value: { total: merged.filter((e) => !e.isDeleted).length, added: newElements.length, url: provider.getUrl(boardId) },
+    };
+  });
 }
 
 // ============================================================
@@ -641,53 +641,53 @@ server.registerTool("update_element", {
   }),
 }, async ({ board_id, element_id, props }) => {
   try {
-    await provider.joinRoom(board_id);
-    const existing = await provider.getDrawing(board_id);
-    if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
-    const els = existing.elements || [];
-    const idx = els.findIndex(e => e.id === element_id);
-    if (idx < 0) return { content: [{ type: "text", text: `Element "${element_id}" not found` }], isError: true };
+    const changes = JSON.parse(props);
+    let report = null;
 
-    const { applied, protectedKeys, unknown } = reviewChanges(JSON.parse(props), els[idx]);
-    if (!Object.keys(applied).length) {
-      return {
-        content: [{ type: "text", text: refusalText(protectedKeys, unknown) || "Nothing to change." }],
-        isError: true,
+    const outcome = await commit(board_id, (els) => {
+      const idx = els.findIndex(e => e.id === element_id);
+      if (idx < 0) throw new Error(`Element "${element_id}" not found`);
+
+      const { applied, protectedKeys, unknown } = reviewChanges(changes, els[idx]);
+      if (!Object.keys(applied).length) {
+        throw new Error(refusalText(protectedKeys, unknown) || "Nothing to change.");
+      }
+
+      const now = Date.now();
+      const updated = {
+        ...els[idx], ...applied, updated: now,
+        version: (els[idx].version || 1) + 1,
+        versionNonce: Math.floor(Math.random() * 2147483647),
       };
+      const before = els[idx];
+      const next = els.map((e, i) => (i === idx ? updated : e));
+
+      // Moving a shape has to move its caption and re-aim the arrows attached
+      // to it, or the board falls apart around the element that was edited.
+      const { touched, keptArrows } = reflowDependants(next, element_id, before, edgePoint, centre);
+      const followers = touched.map(e => ({
+        ...e, updated: now,
+        version: (e.version || 1) + 1,
+        versionNonce: Math.floor(Math.random() * 2147483647),
+      }));
+      const byId = new Map(followers.map(e => [e.id, e]));
+      const finalEls = next.map(e => byId.get(e.id) || e);
+
+      report = { applied, protectedKeys, unknown, followers: followers.length, keptArrows };
+      return { elements: finalEls, live: [updated, ...followers], value: true };
+    });
+    if (!outcome) return { content: [{ type: "text", text: "Board not found" }], isError: true };
+
+    const notes = [refusalText(report.protectedKeys, report.unknown)];
+    if (report.followers) notes.push(`Brought ${report.followers} attached element(s) along.`);
+    if (report.keptArrows.length) {
+      notes.push(`Left the shape of ${report.keptArrows.join(", ")} alone — a bent or half-bound arrow is not safe to re-aim automatically.`);
     }
-
-    const updated = {
-      ...els[idx], ...applied, updated: Date.now(),
-      version: (els[idx].version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
-    };
-    const before = els[idx];
-    els[idx] = updated;
-
-    // Moving a shape has to move its caption and re-aim the arrows attached to
-    // it, or the board falls apart around the element that was edited.
-    const { touched, keptArrows } = reflowDependants(els, element_id, before, edgePoint, centre);
-    const followers = touched.map(e => ({
-      ...e, updated: Date.now(),
-      version: (e.version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
-    }));
-    const byId = new Map(followers.map(e => [e.id, e]));
-    const finalEls = els.map(e => byId.get(e.id) || e);
-
-    await provider.pushLive(board_id, [updated, ...followers], finalEls.filter(e => !e.isDeleted).map(e => e.id));
-    await provider.updateDrawing(board_id, finalEls);
-
-    const notes = [refusalText(protectedKeys, unknown)];
-    if (followers.length) notes.push(`Brought ${followers.length} attached element(s) along.`);
-    if (keptArrows.length) {
-      notes.push(`Left the shape of ${keptArrows.join(", ")} alone — a bent or half-bound arrow is not safe to re-aim automatically.`);
-    }
-    if (applied.width || applied.height) {
+    if (report.applied.width || report.applied.height) {
       notes.push("The label was re-centred but not re-wrapped; redraw the node if the text no longer fits.");
     }
     const note = notes.filter(Boolean).join(" ");
-    return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(applied).join(", ")}). ${provider.getUrl(board_id)}${note ? `\n${note}` : ""}` }] };
+    return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(report.applied).join(", ")}). ${provider.getUrl(board_id)}${note ? `\n${note}` : ""}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -700,44 +700,40 @@ server.registerTool("rename_element", {
   }),
 }, async ({ board_id, old_id, new_id }) => {
   try {
-    await provider.joinRoom(board_id);
-    const existing = await provider.getDrawing(board_id);
-    if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
-    const els = existing.elements || [];
+    let repairedCount = 0;
+    const outcome = await commit(board_id, (els) => {
+      const idx = els.findIndex(e => e.id === old_id);
+      if (idx < 0) throw new Error(`Element "${old_id}" not found`);
+      if (els.some(e => e.id === new_id)) throw new Error(`ID "${new_id}" already exists`);
 
-    const idx = els.findIndex(e => e.id === old_id);
-    if (idx < 0) return { content: [{ type: "text", text: `Element "${old_id}" not found` }], isError: true };
-    if (els.some(e => e.id === new_id)) return { content: [{ type: "text", text: `ID "${new_id}" already exists` }], isError: true };
+      const now = Date.now();
+      const bump = (e, extra) => ({
+        ...e, ...extra, updated: now,
+        version: (e.version || 1) + 1,
+        versionNonce: Math.floor(Math.random() * 2147483647),
+      });
 
-    const now = Date.now();
-    const bump = (e, extra) => ({
-      ...e, ...extra, updated: now,
-      version: (e.version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
+      const { elements: retargeted, touched } = retargetReferences(els, old_id, new_id);
+      const repaired = touched.map(e => bump(e));
+      const byId = new Map(repaired.map(e => [e.id, e]));
+
+      const renamed = bump({ ...els[idx], id: new_id });
+      // An id is an element's identity, so a rename is really a new element.
+      // The old one has to be sent as deleted as well: without that, a client
+      // with the board open keeps showing the old element next to the new one,
+      // and only a reload makes the duplicate disappear.
+      const buried = bump({ ...els[idx], isDeleted: true });
+
+      const finalEls = retargeted
+        .map(e => (e.id === old_id ? renamed : byId.get(e.id) || e))
+        .concat(buried);
+
+      repairedCount = repaired.length;
+      return { elements: finalEls, live: [renamed, buried, ...repaired], value: true };
     });
+    if (!outcome) return { content: [{ type: "text", text: "Board not found" }], isError: true };
 
-    const { elements: retargeted, touched } = retargetReferences(els, old_id, new_id);
-    const repaired = touched.map(e => bump(e));
-    const byId = new Map(repaired.map(e => [e.id, e]));
-
-    const renamed = bump({ ...els[idx], id: new_id });
-    // An id is an element's identity, so a rename is really a new element. The
-    // old one has to be sent as deleted as well: without that, a client with
-    // the board open keeps showing the old element next to the new one, and
-    // only a reload makes the duplicate disappear.
-    const buried = bump({ ...els[idx], isDeleted: true });
-
-    const finalEls = retargeted
-      .map(e => (e.id === old_id ? renamed : byId.get(e.id) || e))
-      .concat(buried);
-
-    await provider.pushLive(
-      board_id,
-      [renamed, buried, ...repaired],
-      finalEls.filter(e => !e.isDeleted).map(e => e.id),
-    );
-    await provider.updateDrawing(board_id, finalEls);
-    return { content: [{ type: "text", text: `Renamed "${old_id}" to "${new_id}" (${repaired.length} reference(s) repointed). ${provider.getUrl(board_id)}` }] };
+    return { content: [{ type: "text", text: `Renamed "${old_id}" to "${new_id}" (${repairedCount} reference(s) repointed). ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -755,56 +751,62 @@ server.registerTool("delete_elements", {
       const r = await pushElements(board_id, [], "wipe");
       return { content: [{ type: "text", text: `Cleared the whole board, hand-drawn work included. ${r.url}` }] };
     }
-    await provider.joinRoom(board_id);
-    const existing = await provider.getDrawing(board_id);
-    if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
-    // Only what is still on the board can be deleted. Matching against every
-    // element would also match the tombstones of earlier deletions, and a
-    // second delete of the same name would report a success that removed
-    // nothing at all.
-    const live = (existing.elements || []).filter(e => !e.isDeleted);
-    const named = live.filter(e => element_ids.includes(e.id)).map(e => e.id);
-    const deleteSet = expandDeletion(live, named);
+    let summary = null;
+    let missing = null;
 
-    // Nothing matched, so nothing was deleted. Reporting "deleted 0" without
-    // saying so reads as done, and the caller moves on believing the board
-    // changed. Names are the only handle here, and they are easy to get wrong.
-    if (deleteSet.size === 0) {
-      // Bound labels carry generated ids nobody typed, so naming them back as
-      // suggestions is noise. Only what a caller could have meant is listed.
-      const known = live.filter(e => !e.containerId).map(e => e.id);
+    const outcome = await commit(board_id, (allEls) => {
+      // Only what is still on the board can be deleted. Matching against every
+      // element would also match the tombstones of earlier deletions, and a
+      // second delete of the same name would report a success that removed
+      // nothing at all.
+      const live = allEls.filter(e => !e.isDeleted);
+      const named = live.filter(e => element_ids.includes(e.id)).map(e => e.id);
+      const deleteSet = expandDeletion(live, named);
+
+      // Nothing matched, so nothing was deleted. Reporting "deleted 0" without
+      // saying so reads as done, and the caller moves on believing the board
+      // changed. Names are the only handle here, and they are easy to get wrong.
+      if (deleteSet.size === 0) {
+        // Bound labels carry generated ids nobody typed, so naming them back as
+        // suggestions is noise. Only what a caller could have meant is listed.
+        missing = live.filter(e => !e.containerId).map(e => e.id);
+        return null;
+      }
+
+      const now = Date.now();
+      const bump = (e, extra) => ({
+        ...e, ...extra, updated: now,
+        version: (e.version || 1) + 1,
+        versionNonce: Math.floor(Math.random() * 2147483647),
+      });
+
+      const tombstoned = allEls.map(e => (deleteSet.has(e.id) ? bump(e, { isDeleted: true }) : e));
+
+      // Whatever pointed at the deleted elements has to let go of them, or the
+      // board keeps arrows bound to shapes that are no longer there.
+      const { elements: els, touched } = severReferences(tombstoned, deleteSet);
+      const repaired = touched.map(e => bump(e));
+      const byId = new Map(repaired.map(e => [e.id, e]));
+      const finalEls = els.map(e => byId.get(e.id) || e);
+
+      const deleted = finalEls.filter(e => deleteSet.has(e.id));
+      summary = { deleted: deleted.length, repaired: repaired.length };
+      return { elements: finalEls, live: [...deleted, ...repaired], value: true };
+    });
+
+    if (missing) {
       return {
         content: [{
           type: "text",
           text: `Nothing was deleted: no element on this board is named ${element_ids.map(id => `"${id}"`).join(", ")}.`
-            + (known.length ? ` The board has ${known.slice(0, 15).join(", ")}${known.length > 15 ? ", …" : ""}.` : " The board is empty."),
+            + (missing.length ? ` The board has ${missing.slice(0, 15).join(", ")}${missing.length > 15 ? ", …" : ""}.` : " The board is empty."),
         }],
         isError: true,
       };
     }
-
-    const now = Date.now();
-    const bump = (e, extra) => ({
-      ...e, ...extra, updated: now,
-      version: (e.version || 1) + 1,
-      versionNonce: Math.floor(Math.random() * 2147483647),
-    });
-
-    const tombstoned = (existing.elements || []).map(e =>
-      deleteSet.has(e.id) ? bump(e, { isDeleted: true }) : e);
-
-    // Whatever pointed at the deleted elements has to let go of them, or the
-    // board keeps arrows bound to shapes that are no longer there.
-    const { elements: els, touched } = severReferences(tombstoned, deleteSet);
-    const repaired = touched.map(e => bump(e));
-    const byId = new Map(repaired.map(e => [e.id, e]));
-    const finalEls = els.map(e => byId.get(e.id) || e);
-
-    const deleted = finalEls.filter(e => deleteSet.has(e.id));
-    await provider.pushLive(board_id, [...deleted, ...repaired], finalEls.filter(e => !e.isDeleted).map(e => e.id));
-    await provider.updateDrawing(board_id, finalEls);
-    const note = repaired.length ? ` Released ${repaired.length} reference(s) to them.` : "";
-    return { content: [{ type: "text", text: `Deleted ${deleted.length} elements.${note} ${provider.getUrl(board_id)}` }] };
+    if (!outcome) return { content: [{ type: "text", text: "Board not found" }], isError: true };
+    const note = summary.repaired ? ` Released ${summary.repaired} reference(s) to them.` : "";
+    return { content: [{ type: "text", text: `Deleted ${summary.deleted} elements.${note} ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 

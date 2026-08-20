@@ -11,6 +11,20 @@
  */
 import { io } from "socket.io-client";
 
+/**
+ * The board changed since it was read.
+ *
+ * Carries the version the server actually holds, so a caller can read that
+ * state and merge into it instead of writing over it.
+ */
+export class VersionConflictError extends Error {
+  constructor(currentVersion) {
+    super("The board changed since it was read.");
+    this.name = "VersionConflictError";
+    this.currentVersion = currentVersion ?? null;
+  }
+}
+
 export class ExcaliDashProvider {
   /** In-flight login, so concurrent callers wait on one attempt instead of racing. */
   #loginInFlight = null;
@@ -293,22 +307,24 @@ export class ExcaliDashProvider {
 
   async #put(path, body) {
     await this.#login();
-    let res = await this.#fetch(`${this.backendUrl}${path}`, {
+    const send = () => this.#fetch(`${this.backendUrl}${path}`, {
       method: "PUT",
       headers: this.#authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
-    if (res.status === 401 || res.status === 403) {
+    let res = await send();
+    if ((res.status === 401 || res.status === 403) && !this.apiKey) {
       await this.#reauth();
-      res = await this.#fetch(`${this.backendUrl}${path}`, {
-        method: "PUT",
-        headers: this.#authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(body),
-      });
+      res = await send();
     }
-    if (!res.ok) throw new Error(`PUT ${path}: ${res.status}`);
+    if (res.status === 409) {
+      const detail = await res.json().catch(() => ({}));
+      throw new VersionConflictError(detail?.currentVersion);
+    }
+    if (!res.ok) throw await this.#fail(res, "PUT", path);
     return this.#json(res, path);
   }
+
 
   // --- Socket.IO ---
   /**
@@ -371,7 +387,21 @@ export class ExcaliDashProvider {
   async createDrawing(name, elements, appState = {}, files = {}) {
     return this.#post("/drawings", { name, elements, appState, files });
   }
-  async updateDrawing(id, elements) { return this.#put(`/drawings/${id}`, { elements }); }
+  /**
+   * Persist the elements.
+   *
+   * Passing the version the board had when it was read turns this into a
+   * compare-and-swap: the backend refuses the write if anything changed in
+   * between, instead of letting it overwrite work someone else did. Without it
+   * the check is skipped entirely, which is how a person drawing while an agent
+   * was mid-call used to lose what they had drawn.
+   */
+  async updateDrawing(id, elements, version) {
+    const body = version === undefined || version === null
+      ? { elements }
+      : { elements, version };
+    return this.#put(`/drawings/${id}`, body);
+  }
   async listDrawings() {
     const data = await this.#get("/drawings");
     return data?.drawings || [];
