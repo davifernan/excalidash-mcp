@@ -17,6 +17,10 @@ export class ExcaliDashProvider {
     const rawBackend = opts.backendUrl || process.env.EXCALIDASH_BACKEND_URL || "http://127.0.0.1:6768";
     this.backendUrl = rawBackend.replace(/\/+$/, "");
     this.publicUrl = (opts.publicUrl || process.env.EXCALIDASH_URL || "http://localhost:6767").replace(/\/+$/, "");
+    // An API key is the preferred credential: it needs no login round trip,
+    // no CSRF token and no cookie jar, and it is revocable on its own.
+    this.apiKey = opts.apiKey || process.env.EXCALIDASH_API_KEY || "";
+    // Email and password stay supported for instances without API keys.
     this.email = opts.email || process.env.EXCALIDASH_EMAIL || "";
     this.password = opts.password || process.env.EXCALIDASH_PASSWORD || "";
 
@@ -26,6 +30,13 @@ export class ExcaliDashProvider {
     this.proxyHeaders = {};
     if (proto) this.proxyHeaders["X-Forwarded-Proto"] = proto;
     if (host) this.proxyHeaders["Host"] = host;
+
+    if (!this.apiKey && !(this.email && this.password)) {
+      throw new Error(
+        "No credentials: set EXCALIDASH_API_KEY (create one under Profile > API keys), " +
+        "or EXCALIDASH_EMAIL and EXCALIDASH_PASSWORD."
+      );
+    }
 
     this.authToken = null;
     this.csrfToken = null;
@@ -47,6 +58,16 @@ export class ExcaliDashProvider {
   }
 
   getUrl(drawingId) { return `${this.publicUrl}/editor/${drawingId}`; }
+
+  /** Credentials for a REST call: a bearer key, or the cookie session. */
+  #authHeaders(extra = {}) {
+    if (this.apiKey) {
+      return { ...this.proxyHeaders, Authorization: `Bearer ${this.apiKey}`, ...extra };
+    }
+    // CSRF only guards cookie sessions; key requests are exempt server-side.
+    const csrf = this.csrfToken ? { "x-csrf-token": this.csrfToken } : {};
+    return { ...this.proxyHeaders, Cookie: this.#getCookieHeader(), ...csrf, ...extra };
+  }
 
   /**
    * Parse a backend response as JSON, with a useful error when it isn't.
@@ -86,7 +107,7 @@ export class ExcaliDashProvider {
 
   async #refreshCsrf() {
     const res = await fetch(`${this.backendUrl}/csrf-token`, {
-      headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders(),
     });
     const data = await this.#json(res, "/csrf-token");
     this.csrfToken = data.token;
@@ -94,6 +115,8 @@ export class ExcaliDashProvider {
   }
 
   async #login() {
+    // A key authenticates every request on its own; there is nothing to log in to.
+    if (this.apiKey) return;
     if (this.authToken) { await this.#refreshCsrf(); return; }
 
     const csrfRes = await fetch(`${this.backendUrl}/csrf-token`, { headers: this.proxyHeaders });
@@ -139,12 +162,12 @@ export class ExcaliDashProvider {
   async #get(path) {
     await this.#login();
     let res = await fetch(`${this.backendUrl}${path}`, {
-      headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders(),
     });
     if (res.status === 401 || res.status === 403) {
       await this.#reauth();
       res = await fetch(`${this.backendUrl}${path}`, {
-        headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+        headers: this.#authHeaders(),
       });
     }
     if (!res.ok) return null;
@@ -155,14 +178,14 @@ export class ExcaliDashProvider {
     await this.#login();
     let res = await fetch(`${this.backendUrl}${path}`, {
       method: "POST",
-      headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (res.status === 401 || res.status === 403) {
       await this.#reauth();
       res = await fetch(`${this.backendUrl}${path}`, {
         method: "POST",
-        headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+        headers: this.#authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
     }
@@ -201,7 +224,7 @@ export class ExcaliDashProvider {
   async #getStrict(path) {
     await this.#login();
     const send = () => fetch(`${this.backendUrl}${path}`, {
-      headers: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders(),
     });
     let res = await send();
     if (res.status === 401 || res.status === 403) {
@@ -216,7 +239,7 @@ export class ExcaliDashProvider {
     await this.#login();
     const send = () => fetch(`${this.backendUrl}${path}`, {
       method: "DELETE",
-      headers: { ...this.proxyHeaders, "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders(),
     });
     let res = await send();
     if (res.status === 401 || res.status === 403) {
@@ -231,14 +254,14 @@ export class ExcaliDashProvider {
     await this.#login();
     let res = await fetch(`${this.backendUrl}${path}`, {
       method: "PUT",
-      headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+      headers: this.#authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (res.status === 401 || res.status === 403) {
       await this.#reauth();
       res = await fetch(`${this.backendUrl}${path}`, {
         method: "PUT",
-        headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
+        headers: this.#authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
       });
     }
@@ -252,9 +275,12 @@ export class ExcaliDashProvider {
     await this.#login();
     this.socket = io(this.socketOrigin, {
       path: this.socketPath,
-      auth: { token: this.authToken },
+      // The server accepts either an API key or an access token here.
+      auth: { token: this.apiKey || this.authToken },
       transports: ["websocket", "polling"],
-      extraHeaders: { ...this.proxyHeaders, "Cookie": this.#getCookieHeader() },
+      extraHeaders: this.apiKey
+        ? { ...this.proxyHeaders }
+        : { ...this.proxyHeaders, Cookie: this.#getCookieHeader() },
       reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
     });
     this.socket.on("disconnect", () => this.joinedRooms.clear());
@@ -298,6 +324,10 @@ export class ExcaliDashProvider {
   /** Who we are signed in as, once the session exists. */
   async whoAmI() {
     await this.#login();
+    // With a key there is no login response to learn the identity from, so ask.
+    if (!this.user && this.apiKey) {
+      this.user = (await this.#get("/auth/me"))?.user ?? null;
+    }
     return this.user;
   }
 

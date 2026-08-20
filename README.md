@@ -47,13 +47,20 @@ same shape in their own config file:
       "env": {
         "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
         "EXCALIDASH_URL": "https://draw.example.com",
-        "EXCALIDASH_EMAIL": "agent@example.com",
-        "EXCALIDASH_PASSWORD": "your-agent-password"
+        "EXCALIDASH_API_KEY": "exd_..."
       }
     }
   }
 }
 ```
+
+> [!TIP]
+> Create the key in ExcaliDash under **Profile → API keys**. It is shown once, right after you
+> create it. Give it the `drawings:history` and `drawings:share` scopes if you want the agent to
+> read version history or manage sharing; the defaults cover drawing and collection work.
+>
+> Email and password still work for instances without API keys, but a key needs no login round
+> trip, is not subject to the login rate limit, and can be revoked on its own.
 
 > [!TIP]
 > Point `EXCALIDASH_BACKEND_URL` at your instance's **`/api`** path. The ExcaliDash frontend proxies
