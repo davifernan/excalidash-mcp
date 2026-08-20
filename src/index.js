@@ -18,6 +18,10 @@ import {
 } from "./sharing.js";
 import { convertElements, closeConverter, renderPng } from "./converter.js";
 import { writeFile } from "node:fs/promises";
+import { exportPath, checkedUrl } from "./exports.js";
+import { reviewChanges } from "./elementProps.js";
+import { expandDeletion, severReferences, retargetReferences, reflowDependants } from "./relations.js";
+import { edgePoint, centre } from "./geometry.js";
 
 const provider = new ExcaliDashProvider();
 
@@ -609,31 +613,74 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
 // ============================================================
 // Edit / Delete
 // ============================================================
+/** Why some of the requested changes were not made. */
+function refusalText(protectedKeys, unknown) {
+  const parts = [];
+  if (protectedKeys.length) {
+    parts.push(
+      `Left alone: ${protectedKeys.join(", ")} — these hold the board together ` +
+      `(identity, bindings, deletion state) and changing them by hand breaks it. ` +
+      `Use rename_element, delete_elements or redraw instead.`);
+  }
+  if (unknown.length) parts.push(`Not a known property: ${unknown.join(", ")}.`);
+  return parts.join(" ");
+}
 server.registerTool("update_element", {
   description: "Update properties of an existing element by its name/ID (e.g. 'frontend', 'api-arrow'). Use read_board to see all element IDs.",
   inputSchema: z.object({
     board_id: z.string(),
     element_id: z.string(),
-    props: z.string().describe('JSON of properties to change'),
+    props: z.string().describe('JSON of appearance, geometry or text properties, e.g. {"strokeColor":"#1971c2","x":200}'),
   }),
 }, async ({ board_id, element_id, props }) => {
   try {
-    const changes = JSON.parse(props);
     await provider.joinRoom(board_id);
     const existing = await provider.getDrawing(board_id);
     if (!existing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
     const els = existing.elements || [];
     const idx = els.findIndex(e => e.id === element_id);
     if (idx < 0) return { content: [{ type: "text", text: `Element "${element_id}" not found` }], isError: true };
+
+    const { applied, protectedKeys, unknown } = reviewChanges(JSON.parse(props), els[idx]);
+    if (!Object.keys(applied).length) {
+      return {
+        content: [{ type: "text", text: refusalText(protectedKeys, unknown) || "Nothing to change." }],
+        isError: true,
+      };
+    }
+
     const updated = {
-      ...els[idx], ...changes, updated: Date.now(),
+      ...els[idx], ...applied, updated: Date.now(),
       version: (els[idx].version || 1) + 1,
       versionNonce: Math.floor(Math.random() * 2147483647),
     };
+    const before = els[idx];
     els[idx] = updated;
-    await provider.pushLive(board_id, [updated], els.map(e => e.id));
-    await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Updated "${element_id}". ${provider.getUrl(board_id)}` }] };
+
+    // Moving a shape has to move its caption and re-aim the arrows attached to
+    // it, or the board falls apart around the element that was edited.
+    const { touched, keptArrows } = reflowDependants(els, element_id, before, edgePoint, centre);
+    const followers = touched.map(e => ({
+      ...e, updated: Date.now(),
+      version: (e.version || 1) + 1,
+      versionNonce: Math.floor(Math.random() * 2147483647),
+    }));
+    const byId = new Map(followers.map(e => [e.id, e]));
+    const finalEls = els.map(e => byId.get(e.id) || e);
+
+    await provider.pushLive(board_id, [updated, ...followers], finalEls.filter(e => !e.isDeleted).map(e => e.id));
+    await provider.updateDrawing(board_id, finalEls);
+
+    const notes = [refusalText(protectedKeys, unknown)];
+    if (followers.length) notes.push(`Brought ${followers.length} attached element(s) along.`);
+    if (keptArrows.length) {
+      notes.push(`Left the shape of ${keptArrows.join(", ")} alone — a bent or half-bound arrow is not safe to re-aim automatically.`);
+    }
+    if (applied.width || applied.height) {
+      notes.push("The label was re-centred but not re-wrapped; redraw the node if the text no longer fits.");
+    }
+    const note = notes.filter(Boolean).join(" ");
+    return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(applied).join(", ")}). ${provider.getUrl(board_id)}${note ? `\n${note}` : ""}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -656,56 +703,34 @@ server.registerTool("rename_element", {
     if (els.some(e => e.id === new_id)) return { content: [{ type: "text", text: `ID "${new_id}" already exists` }], isError: true };
 
     const now = Date.now();
-    const changed = [];
+    const bump = (e, extra) => ({
+      ...e, ...extra, updated: now,
+      version: (e.version || 1) + 1,
+      versionNonce: Math.floor(Math.random() * 2147483647),
+    });
 
-    for (let i = 0; i < els.length; i++) {
-      let modified = false;
-      const el = { ...els[i] };
+    const { elements: retargeted, touched } = retargetReferences(els, old_id, new_id);
+    const repaired = touched.map(e => bump(e));
+    const byId = new Map(repaired.map(e => [e.id, e]));
 
-      // Rename the element itself
-      if (el.id === old_id) {
-        el.id = new_id;
-        modified = true;
-      }
+    const renamed = bump({ ...els[idx], id: new_id });
+    // An id is an element's identity, so a rename is really a new element. The
+    // old one has to be sent as deleted as well: without that, a client with
+    // the board open keeps showing the old element next to the new one, and
+    // only a reload makes the duplicate disappear.
+    const buried = bump({ ...els[idx], isDeleted: true });
 
-      // Update containerId reference
-      if (el.containerId === old_id) {
-        el.containerId = new_id;
-        modified = true;
-      }
+    const finalEls = retargeted
+      .map(e => (e.id === old_id ? renamed : byId.get(e.id) || e))
+      .concat(buried);
 
-      // Update boundElements references
-      if (Array.isArray(el.boundElements)) {
-        const newBound = el.boundElements.map(b => {
-          if (b.id === old_id) { modified = true; return { ...b, id: new_id }; }
-          return b;
-        });
-        if (modified) el.boundElements = newBound;
-      }
-
-      // Update arrow bindings
-      if (el.startBinding?.elementId === old_id) {
-        el.startBinding = { ...el.startBinding, elementId: new_id };
-        modified = true;
-      }
-      if (el.endBinding?.elementId === old_id) {
-        el.endBinding = { ...el.endBinding, elementId: new_id };
-        modified = true;
-      }
-
-      if (modified) {
-        el.updated = now;
-        el.version = (els[i].version || 1) + 1;
-        el.versionNonce = Math.floor(Math.random() * 2147483647);
-        changed.push(el);
-      }
-
-      els[i] = el;
-    }
-
-    await provider.pushLive(board_id, changed, els.map(e => e.id));
-    await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Renamed "${old_id}" to "${new_id}" (${changed.length} elements updated). ${provider.getUrl(board_id)}` }] };
+    await provider.pushLive(
+      board_id,
+      [renamed, buried, ...repaired],
+      finalEls.filter(e => !e.isDeleted).map(e => e.id),
+    );
+    await provider.updateDrawing(board_id, finalEls);
+    return { content: [{ type: "text", text: `Renamed "${old_id}" to "${new_id}" (${repaired.length} reference(s) repointed). ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -731,12 +756,8 @@ server.registerTool("delete_elements", {
     // second delete of the same name would report a success that removed
     // nothing at all.
     const live = (existing.elements || []).filter(e => !e.isDeleted);
-    const deleteSet = new Set(live.filter(e => element_ids.includes(e.id)).map(e => e.id));
-    // A shape's label is a separate element bound to it. Deleting only the shape
-    // leaves the label floating on the canvas.
-    for (const el of live) {
-      if (el.containerId && deleteSet.has(el.containerId)) deleteSet.add(el.id);
-    }
+    const named = live.filter(e => element_ids.includes(e.id)).map(e => e.id);
+    const deleteSet = expandDeletion(live, named);
 
     // Nothing matched, so nothing was deleted. Reporting "deleted 0" without
     // saying so reads as done, and the caller moves on believing the board
@@ -756,16 +777,27 @@ server.registerTool("delete_elements", {
     }
 
     const now = Date.now();
-    const els = (existing.elements || []).map(e =>
-      deleteSet.has(e.id)
-        ? { ...e, isDeleted: true, updated: now, version: (e.version || 1) + 1, versionNonce: Math.floor(Math.random() * 2147483647) }
-        : e
-    );
-    const deleted = els.filter(e => deleteSet.has(e.id));
+    const bump = (e, extra) => ({
+      ...e, ...extra, updated: now,
+      version: (e.version || 1) + 1,
+      versionNonce: Math.floor(Math.random() * 2147483647),
+    });
 
-    await provider.pushLive(board_id, deleted, els.map(e => e.id));
-    await provider.updateDrawing(board_id, els);
-    return { content: [{ type: "text", text: `Deleted ${deleted.length} elements. ${provider.getUrl(board_id)}` }] };
+    const tombstoned = (existing.elements || []).map(e =>
+      deleteSet.has(e.id) ? bump(e, { isDeleted: true }) : e);
+
+    // Whatever pointed at the deleted elements has to let go of them, or the
+    // board keeps arrows bound to shapes that are no longer there.
+    const { elements: els, touched } = severReferences(tombstoned, deleteSet);
+    const repaired = touched.map(e => bump(e));
+    const byId = new Map(repaired.map(e => [e.id, e]));
+    const finalEls = els.map(e => byId.get(e.id) || e);
+
+    const deleted = finalEls.filter(e => deleteSet.has(e.id));
+    await provider.pushLive(board_id, [...deleted, ...repaired], finalEls.filter(e => !e.isDeleted).map(e => e.id));
+    await provider.updateDrawing(board_id, finalEls);
+    const note = repaired.length ? ` Released ${repaired.length} reference(s) to them.` : "";
+    return { content: [{ type: "text", text: `Deleted ${deleted.length} elements.${note} ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -794,9 +826,12 @@ server.registerTool("export_png", {
   }),
 }, async ({ board_id, url, output, width, height, wait, fit, scale }) => {
   try {
-    const targetUrl = url || (board_id ? provider.getUrl(board_id) : null);
-    if (!targetUrl) return { content: [{ type: "text", text: "Provide board_id or url" }], isError: true };
-    const outPath = output || `/tmp/excalidash-export-${Date.now()}.png`;
+    if (!board_id && !url) return { content: [{ type: "text", text: "Provide board_id or url" }], isError: true };
+    const targetUrl = url ? checkedUrl(url, provider.publicUrl) : provider.getUrl(board_id);
+    const outPath = exportPath(output);
+    // A canvas is allocated at width x height x scale^2; without a ceiling a
+    // single call can ask for gigabytes.
+    const density = Math.min(Math.max(scale || 2, 1), 4);
 
     // Preferred path: render the board's elements with Excalidraw's own export.
     // Always frames the whole drawing, and skips loading the editor entirely.
@@ -805,14 +840,23 @@ server.registerTool("export_png", {
       if (!drawing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
       const active = (drawing.elements || []).filter(e => !e.isDeleted);
       if (!active.length) return { content: [{ type: "text", text: "Board is empty — nothing to export." }], isError: true };
-      const dataUrl = await renderPng(active, { scale: scale || 2 });
+      const dataUrl = await renderPng(active, { scale: density });
       await writeFile(outPath, Buffer.from(dataUrl.split(",")[1], "base64"));
       return { content: [{ type: "text", text: `Screenshot saved: ${outPath} (${active.length} elements)` }] };
     }
 
     const browser = await getBrowser();
-    const page = await browser.newPage({ viewport: { width: width || 1920, height: height || 1080 } });
-    if (board_id && !url) {
+    const page = await browser.newPage({
+      viewport: {
+        width: Math.min(Math.max(width || 1920, 320), 4000),
+        height: Math.min(Math.max(height || 1080, 240), 4000),
+      },
+    });
+    try {
+    // Reaching this point means a url was passed, so the board was never
+    // fetched through the API and the editor has to be logged in. An API key
+    // cannot drive a browser form, so this path needs email and password.
+    if (provider.email && provider.password) {
       // networkidle never settles here: the app holds a Socket.IO connection open.
       await page.goto(provider.publicUrl + "/login", { waitUntil: "domcontentloaded", timeout: 15000 });
       await page.fill('input[type="email"]', provider.email).catch(() => {});
@@ -885,11 +929,15 @@ server.registerTool("export_png", {
     } else {
       await page.screenshot({ path: outPath });
     }
-    await page.close();
     const note = clip && !clipped
       ? " (drawing reaches the viewport edge — pass a larger width/height to capture all of it)"
       : "";
     return { content: [{ type: "text", text: `Screenshot saved: ${outPath}${note}` }] };
+    } finally {
+      // Anything thrown between opening the page and here used to leave it
+      // open, so a run of failed exports piled up tabs in the shared browser.
+      await page.close().catch(() => {});
+    }
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 

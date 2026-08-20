@@ -12,6 +12,7 @@
 import dagre from "@dagrejs/dagre";
 import { resolveColor, resolveFill } from "./elements.js";
 import { layoutLabels } from "./converter.js";
+import { edgePoint, centre } from "./geometry.js";
 
 /**
  * Run dagre over the graph and return simplified elements ready for
@@ -225,7 +226,6 @@ export async function layoutGraph({ nodes, edges, direction = "TB", title = null
   return [...arrows, ...rest];
 }
 
-const centre = (b) => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
 
 /**
  * An edge from a node to itself.
@@ -531,19 +531,6 @@ async function measureEdgeLabels(edges) {
   return new Map(labels.map((l, i) => [l, widths[i].width]));
 }
 
-function edgePoint(box, tx, ty) {
-  const cx = box.x + box.width / 2;
-  const cy = box.y + box.height / 2;
-  const dx = tx - cx, dy = ty - cy;
-  const hw = box.width / 2, hh = box.height / 2;
-  if (dx === 0 && dy === 0) return { x: cx, y: cy };
-  if (Math.abs(dx) * hh > Math.abs(dy) * hw) {
-    const sx = dx > 0 ? 1 : -1;
-    return { x: cx + sx * hw, y: cy + dy * (hw / Math.abs(dx)) };
-  }
-  const sy = dy > 0 ? 1 : -1;
-  return { x: cx + dx * (hh / Math.abs(dy)), y: cy + sy * hh };
-}
 
 /**
  * Graph DSL — structure only, no coordinates.
