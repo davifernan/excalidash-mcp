@@ -52,7 +52,7 @@ jobs:
         id: package
         run: |
           npm pack --json > pack-result.json
-          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("pack-result.json"))[0]; const bad=p.files.map(f=>f.path).filter(f=>/^(assets|docs|skills|test)\//.test(f)); if(bad.length) throw new Error(`Unexpected files: ${bad.join(", ")}`); fs.appendFileSync(process.env.GITHUB_OUTPUT, `filename=${p.filename}\n`); console.error(`${p.filename}: ${p.entryCount} files, ${p.size} bytes`);'
+          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("pack-result.json"))[0]; const files=p.files.map(f=>f.path); const bad=files.filter(f=>/^(assets|docs|test)\//.test(f)); const required=["skills/excalidash-diagramming/SKILL.md","skills/excalidash-diagramming/agents/openai.yaml"]; const missing=required.filter(f=>!files.includes(f)); if(bad.length) throw new Error(`Unexpected files: ${bad.join(", ")}`); if(missing.length) throw new Error(`Missing files: ${missing.join(", ")}`); fs.appendFileSync(process.env.GITHUB_OUTPUT, `filename=${p.filename}\n`); console.error(`${p.filename}: ${p.entryCount} files, ${p.size} bytes`);'
       - name: Install and execute the packed artifact
         env:
           PACKAGE_FILE: ${{ steps.package.outputs.filename }}
@@ -66,6 +66,10 @@ jobs:
           test "$status" -eq 1
           test ! -s "$smoke_dir/stdout"
           grep -q "Missing ExcaliDash credentials" "$smoke_dir/stderr"
+          CODEX_HOME="$smoke_dir/codex" "$smoke_dir/node_modules/.bin/excalidash-mcp" install-skill --client codex
+          test -f "$smoke_dir/codex/skills/excalidash-diagramming/SKILL.md"
+          CLAUDE_CONFIG_DIR="$smoke_dir/claude" "$smoke_dir/node_modules/.bin/excalidash-mcp" install-skill --client claude
+          test -f "$smoke_dir/claude/skills/excalidash-diagramming/SKILL.md"
       - uses: actions/upload-artifact@v6
         with:
           name: npm-package

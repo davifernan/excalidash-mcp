@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 - 2026-08-20
+
+- Ship the ExcaliDash diagramming skill in the npm package.
+- Add `install-skill` for safe, explicit installation into Codex and Claude, including collision
+  protection and timestamped backups when `--force` is requested.
+
 ## 1.1.0 - 2026-08-20
 
 - Add `draw_mermaid`, backed by Excalidraw's official Mermaid converter, for native editable
