@@ -9,3 +9,35 @@ export function parse() {
 export function isEmResetFrame() {
   return false;
 }
+
+// Mermaid's optional railroad diagrams construct their parser services when
+// their lazy chunks are evaluated. Keep those chunks linkable as Mermaid adds
+// diagram types, while still failing clearly if an unreachable parser is ever
+// invoked through this converter-only bundle.
+export class MermaidParseError extends Error {}
+
+const unavailableParser = {
+  parse() {
+    throw new Error("Mermaid parsing is not included in excalidash-mcp's converter bundle.");
+  },
+};
+
+function railroadServices(name) {
+  return { [name]: { parser: { LangiumParser: unavailableParser } } };
+}
+
+export function createRailroadServices() {
+  return railroadServices("Railroad");
+}
+
+export function createRailroadEbnfServices() {
+  return railroadServices("RailroadEbnf");
+}
+
+export function createRailroadAbnfServices() {
+  return railroadServices("RailroadAbnf");
+}
+
+export function createRailroadPegServices() {
+  return railroadServices("RailroadPeg");
+}

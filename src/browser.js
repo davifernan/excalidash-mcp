@@ -32,13 +32,21 @@ export async function assertBrowserInstalled() {
   }
 }
 
-export async function installBrowser() {
+export function browserInstallArgs({ withDependencies = false } = {}) {
+  const args = ["install"];
+  if (withDependencies) args.push("--with-deps");
+  args.push("chromium");
+  return args;
+}
+
+export async function installBrowser({ withDependencies = false } = {}) {
   const require = createRequire(import.meta.url);
   const packageJson = require.resolve("playwright/package.json");
   const cli = resolve(dirname(packageJson), "cli.js");
+  const args = browserInstallArgs({ withDependencies });
 
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [cli, "install", "chromium"], {
+    const child = spawn(process.execPath, [cli, ...args], {
       stdio: "inherit",
       env: process.env,
     });

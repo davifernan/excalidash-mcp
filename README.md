@@ -34,11 +34,19 @@ agent. Install the matching Chromium build once; package installation deliberate
 a browser behind your back:
 
 ```bash
-npx excalidash-mcp setup-browser
+npx -y excalidash-mcp setup-browser
 ```
 
 When a later package update needs a different Chromium revision, startup stops with this same command
 instead of failing with an internal Playwright error.
+
+On a minimal Linux server or container, install Chromium and its operating-system libraries together:
+
+```bash
+npx -y excalidash-mcp setup-browser --with-deps
+```
+
+The `--with-deps` variant may ask for elevated privileges because it uses the system package manager.
 
 Chromium's process sandbox is enabled by default. Run the server as a non-root user, including in
 containers. Only when that is impossible, `EXCALIDASH_DISABLE_BROWSER_SANDBOX=1` disables the
@@ -59,7 +67,7 @@ Desktop:
   "mcpServers": {
     "excalidash": {
       "command": "npx",
-      "args": ["-y", "excalidash-mcp"],
+      "args": ["-y", "excalidash-mcp@1"],
       "env": {
         "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
         "EXCALIDASH_URL": "https://draw.example.com",
@@ -77,7 +85,7 @@ claude mcp add --scope user excalidash \
   --env EXCALIDASH_BACKEND_URL=https://draw.example.com/api \
   --env EXCALIDASH_URL=https://draw.example.com \
   --env EXCALIDASH_API_KEY=exd_... \
-  -- npx -y excalidash-mcp
+  -- npx -y excalidash-mcp@1
 ```
 
 Verify it with `claude mcp get excalidash`.
@@ -91,7 +99,7 @@ Add this to `~/.cursor/mcp.json`, then reload Cursor:
   "mcpServers": {
     "excalidash": {
       "command": "npx",
-      "args": ["-y", "excalidash-mcp"],
+      "args": ["-y", "excalidash-mcp@1"],
       "env": {
         "EXCALIDASH_BACKEND_URL": "https://draw.example.com/api",
         "EXCALIDASH_URL": "https://draw.example.com",
@@ -209,6 +217,7 @@ itself and exported with `export_png`.
 - [Scene DSL](https://github.com/davifernan/excalidash-mcp/blob/main/docs/scene-dsl.md): manual placement, element reference
 - [Troubleshooting](https://github.com/davifernan/excalidash-mcp/blob/main/docs/troubleshooting.md): HTML instead of JSON, redirects, missing live updates,
   a board link that won't open, sign-ins that start failing on their own
+- [Releasing](https://github.com/davifernan/excalidash-mcp/blob/main/docs/releasing.md): release tags, first-publish token scope, and npm Trusted Publishing
 
 ## License
 

@@ -18,8 +18,11 @@ function credentialError(env = process.env) {
 async function run() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "setup-browser") {
-    if (rest.length) throw new Error("setup-browser does not accept arguments.");
-    await installBrowser();
+    const withDependencies = rest.length === 1 && rest[0] === "--with-deps";
+    if (rest.length && !withDependencies) {
+      throw new Error("setup-browser only accepts the optional --with-deps flag.");
+    }
+    await installBrowser({ withDependencies });
     return;
   }
   if (command) throw new Error(`Unknown command: ${command}`);

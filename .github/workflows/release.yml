@@ -16,17 +16,18 @@ jobs:
     name: Test and inspect package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: npm
+          package-manager-cache: false
       - name: Match tag to package version
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAG: ${{ github.ref_name }}
         run: node -e 'const expected=`v${require("./package.json").version}`; if(process.env.TAG!==expected) throw new Error(`Tag ${process.env.TAG} does not match ${expected}`)'
-      - run: npm install
+      - run: npm ci
+      - run: npm audit
       - run: npx playwright install --with-deps chromium
       # The bundled-converter test skips itself on a machine that cannot start a
       # sandboxed Chromium. That is right for a laptop and wrong here: this is
@@ -46,10 +47,24 @@ jobs:
           npm run build
           git diff --exit-code -- dist
       - name: Pack and reject non-runtime files
+        id: package
         run: |
           npm pack --json > pack-result.json
-          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("pack-result.json"))[0]; const bad=p.files.map(f=>f.path).filter(f=>/^(assets|docs|skills|test)\//.test(f)); if(bad.length) throw new Error(`Unexpected files: ${bad.join(", ")}`); console.error(`${p.filename}: ${p.entryCount} files, ${p.size} bytes`);'
-      - uses: actions/upload-artifact@v4
+          node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("pack-result.json"))[0]; const bad=p.files.map(f=>f.path).filter(f=>/^(assets|docs|skills|test)\//.test(f)); if(bad.length) throw new Error(`Unexpected files: ${bad.join(", ")}`); fs.appendFileSync(process.env.GITHUB_OUTPUT, `filename=${p.filename}\n`); console.error(`${p.filename}: ${p.entryCount} files, ${p.size} bytes`);'
+      - name: Install and execute the packed artifact
+        env:
+          PACKAGE_FILE: ${{ steps.package.outputs.filename }}
+        run: |
+          smoke_dir=$(mktemp -d)
+          npm install --prefix "$smoke_dir" "./$PACKAGE_FILE" >/dev/null
+          set +e
+          "$smoke_dir/node_modules/.bin/excalidash-mcp" >"$smoke_dir/stdout" 2>"$smoke_dir/stderr"
+          status=$?
+          set -e
+          test "$status" -eq 1
+          test ! -s "$smoke_dir/stdout"
+          grep -q "Missing ExcaliDash credentials" "$smoke_dir/stderr"
+      - uses: actions/upload-artifact@v6
         with:
           name: npm-package
           path: "excalidash-mcp-*.tgz"
@@ -64,13 +79,17 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           name: npm-package
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - run: npm publish excalidash-mcp-*.tgz --access public --provenance
+        # NPM_TOKEN bootstraps the first release. Once npm Trusted Publishing is
+        # configured for this workflow, delete the secret and revoke the token;
+        # npm 11+ will authenticate through the job's OIDC identity instead.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -40,16 +40,26 @@
     "provenance": true
   },
   "dependencies": {
-    "@dagrejs/dagre": "^3.1.0",
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@dagrejs/dagre": "^3.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "playwright": "1.59.1",
-    "socket.io-client": "^4.8.1",
-    "zod": "^3.25.20"
+    "socket.io-client": "^4.8.3",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@excalidraw/excalidraw": "0.18.1",
     "esbuild": "0.25.12",
     "react": "19.1.0",
     "react-dom": "19.1.0"
+  },
+  "overrides": {
+    "@excalidraw/excalidraw": {
+      "nanoid": "3.3.18"
+    },
+    "@excalidraw/mermaid-to-excalidraw": {
+      "mermaid": "11.17.0",
+      "nanoid": "5.1.16"
+    },
+    "lodash-es": "4.18.1"
   }
 }
