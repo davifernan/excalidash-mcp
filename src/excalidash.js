@@ -12,6 +12,11 @@
 import { io } from "socket.io-client";
 
 export class ExcaliDashProvider {
+  /** In-flight login, so concurrent callers wait on one attempt instead of racing. */
+  #loginInFlight = null;
+  /** In-flight socket connect, for the same reason. */
+  #socketInFlight = null;
+
   constructor(opts = {}) {
     // Trailing slashes would produce "//csrf-token" once a path is appended.
     const rawBackend = opts.backendUrl || process.env.EXCALIDASH_BACKEND_URL || "http://127.0.0.1:6768";
@@ -20,6 +25,9 @@ export class ExcaliDashProvider {
     // An API key is the preferred credential: it needs no login round trip,
     // no CSRF token and no cookie jar, and it is revocable on its own.
     this.apiKey = opts.apiKey || process.env.EXCALIDASH_API_KEY || "";
+    // Long enough for a slow board to load, short enough that a dead backend
+    // fails instead of hanging the tool call.
+    this.requestTimeoutMs = Number(process.env.EXCALIDASH_TIMEOUT_MS) || 30000;
     // Email and password stay supported for instances without API keys.
     this.email = opts.email || process.env.EXCALIDASH_EMAIL || "";
     this.password = opts.password || process.env.EXCALIDASH_PASSWORD || "";
@@ -106,7 +114,7 @@ export class ExcaliDashProvider {
   }
 
   async #refreshCsrf() {
-    const res = await fetch(`${this.backendUrl}/csrf-token`, {
+    const res = await this.#fetch(`${this.backendUrl}/csrf-token`, {
       headers: this.#authHeaders(),
     });
     const data = await this.#json(res, "/csrf-token");
@@ -114,17 +122,32 @@ export class ExcaliDashProvider {
     this.authCookies.push(...(res.headers.getSetCookie?.() || []));
   }
 
-  async #login() {
+  /**
+   * Log in at most once at a time.
+   *
+   * Several tools starting together each used to run their own login, so the
+   * backend saw a burst of attempts — enough on its own to trip the login rate
+   * limit — and the last one to finish overwrote the tokens the others were
+   * already using.
+   */
+  #login() {
+    if (!this.#loginInFlight) {
+      this.#loginInFlight = this.#doLogin().finally(() => { this.#loginInFlight = null; });
+    }
+    return this.#loginInFlight;
+  }
+
+  async #doLogin() {
     // A key authenticates every request on its own; there is nothing to log in to.
     if (this.apiKey) return;
     if (this.authToken) { await this.#refreshCsrf(); return; }
 
-    const csrfRes = await fetch(`${this.backendUrl}/csrf-token`, { headers: this.proxyHeaders });
+    const csrfRes = await this.#fetch(`${this.backendUrl}/csrf-token`, { headers: this.proxyHeaders });
     const csrfData = await this.#json(csrfRes, "/csrf-token");
     this.csrfToken = csrfData.token;
     this.authCookies = csrfRes.headers.getSetCookie?.() || [];
 
-    const loginRes = await fetch(`${this.backendUrl}/auth/login`, {
+    const loginRes = await this.#fetch(`${this.backendUrl}/auth/login`, {
       method: "POST",
       headers: { ...this.proxyHeaders, "Content-Type": "application/json", "x-csrf-token": this.csrfToken, "Cookie": this.#getCookieHeader() },
       body: JSON.stringify({ email: this.email, password: this.password }),
@@ -151,6 +174,17 @@ export class ExcaliDashProvider {
   }
 
   // --- REST ---
+  /**
+   * fetch with a deadline.
+   *
+   * Without one a backend that accepts the connection and then goes quiet
+   * leaves the call hanging forever, and the MCP tool that made it never
+   * answers — from the outside that looks like the whole server has frozen.
+   */
+  #fetch(url, init = {}) {
+    return fetch(url, { ...init, signal: init.signal || AbortSignal.timeout(this.requestTimeoutMs) });
+  }
+
   async #reauth() {
     this.authToken = null;
     this.csrfToken = null;
@@ -161,7 +195,7 @@ export class ExcaliDashProvider {
 
   async #get(path) {
     await this.#login();
-    let res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await this.#fetch(`${this.backendUrl}${path}`, {
       headers: this.#authHeaders(),
     });
     // Retrying only helps when a session can be re-established. An API key that
@@ -169,7 +203,7 @@ export class ExcaliDashProvider {
     // requests and hides the reason.
     if ((res.status === 401 || res.status === 403) && !this.apiKey) {
       await this.#reauth();
-      res = await fetch(`${this.backendUrl}${path}`, {
+      res = await this.#fetch(`${this.backendUrl}${path}`, {
         headers: this.#authHeaders(),
       });
     }
@@ -183,14 +217,14 @@ export class ExcaliDashProvider {
 
   async #post(path, body) {
     await this.#login();
-    let res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await this.#fetch(`${this.backendUrl}${path}`, {
       method: "POST",
       headers: this.#authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (res.status === 401 || res.status === 403) {
       await this.#reauth();
-      res = await fetch(`${this.backendUrl}${path}`, {
+      res = await this.#fetch(`${this.backendUrl}${path}`, {
         method: "POST",
         headers: this.#authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
@@ -230,7 +264,7 @@ export class ExcaliDashProvider {
    */
   async #getStrict(path) {
     await this.#login();
-    const send = () => fetch(`${this.backendUrl}${path}`, {
+    const send = () => this.#fetch(`${this.backendUrl}${path}`, {
       headers: this.#authHeaders(),
     });
     let res = await send();
@@ -244,7 +278,7 @@ export class ExcaliDashProvider {
 
   async #delete(path) {
     await this.#login();
-    const send = () => fetch(`${this.backendUrl}${path}`, {
+    const send = () => this.#fetch(`${this.backendUrl}${path}`, {
       method: "DELETE",
       headers: this.#authHeaders(),
     });
@@ -259,14 +293,14 @@ export class ExcaliDashProvider {
 
   async #put(path, body) {
     await this.#login();
-    let res = await fetch(`${this.backendUrl}${path}`, {
+    let res = await this.#fetch(`${this.backendUrl}${path}`, {
       method: "PUT",
       headers: this.#authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     if (res.status === 401 || res.status === 403) {
       await this.#reauth();
-      res = await fetch(`${this.backendUrl}${path}`, {
+      res = await this.#fetch(`${this.backendUrl}${path}`, {
         method: "PUT",
         headers: this.#authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(body),
@@ -277,10 +311,24 @@ export class ExcaliDashProvider {
   }
 
   // --- Socket.IO ---
-  async #getSocket() {
-    if (this.socket?.connected) return this.socket;
+  /**
+   * Connect at most once at a time.
+   *
+   * Concurrent callers each used to build their own client; whichever finished
+   * last became `this.socket` while the others kept reconnecting forever in the
+   * background, invisible and still authenticated.
+   */
+  #getSocket() {
+    if (this.socket?.connected) return Promise.resolve(this.socket);
+    if (!this.#socketInFlight) {
+      this.#socketInFlight = this.#connectSocket().finally(() => { this.#socketInFlight = null; });
+    }
+    return this.#socketInFlight;
+  }
+
+  async #connectSocket() {
     await this.#login();
-    this.socket = io(this.socketOrigin, {
+    const socket = io(this.socketOrigin, {
       path: this.socketPath,
       // The server accepts either an API key or an access token here.
       auth: { token: this.apiKey || this.authToken },
@@ -290,12 +338,32 @@ export class ExcaliDashProvider {
         : { ...this.proxyHeaders, Cookie: this.#getCookieHeader() },
       reconnection: true, reconnectionAttempts: 5, reconnectionDelay: 1000,
     });
-    this.socket.on("disconnect", () => this.joinedRooms.clear());
-    return new Promise((resolve, reject) => {
-      this.socket.on("connect", () => resolve(this.socket));
-      this.socket.on("connect_error", (err) => reject(new Error(`Socket: ${err.message}`)));
-      setTimeout(() => reject(new Error("Socket timeout")), 5000);
-    });
+
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Socket timeout")), 5000);
+        const done = (fn) => (arg) => {
+          clearTimeout(timer);
+          socket.off("connect", onOk);
+          socket.off("connect_error", onFail);
+          fn(arg);
+        };
+        const onOk = done(resolve);
+        const onFail = done((err) => reject(new Error(`Socket: ${err.message}`)));
+        socket.once("connect", onOk);
+        socket.once("connect_error", onFail);
+      });
+    } catch (err) {
+      // A client that failed to connect keeps retrying on its own. Dropping the
+      // reference without closing it leaves that retry loop running for the
+      // life of the process.
+      socket.close();
+      throw err;
+    }
+
+    socket.on("disconnect", () => this.joinedRooms.clear());
+    this.socket = socket;
+    return socket;
   }
 
   // --- API ---

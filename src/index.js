@@ -22,6 +22,7 @@ import { exportPath, checkedUrl } from "./exports.js";
 import { reviewChanges } from "./elementProps.js";
 import { expandDeletion, severReferences, retargetReferences, reflowDependants } from "./relations.js";
 import { edgePoint, centre } from "./geometry.js";
+import { checkIds } from "./validate.js";
 
 const provider = new ExcaliDashProvider();
 
@@ -567,6 +568,12 @@ IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...
   try {
     const elements = parseDSL(scene);
     if (!elements.length) return { content: [{ type: "text", text: "No valid elements." }], isError: true };
+    // Two elements sharing a name means update_element and delete_elements can
+    // only ever reach one of them, and which one is not predictable.
+    const problems = checkIds(elements.map(e => e.id));
+    if (problems.length) {
+      return { content: [{ type: "text", text: `Cannot draw this scene: ${problems.join(" ")}` }], isError: true };
+    }
     const r = await pushElements(board_id, elements, mode || "append");
     return { content: [{ type: "text", text: `Drew ${r.added} elements (${r.total} total). ${r.url}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }

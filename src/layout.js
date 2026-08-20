@@ -13,6 +13,7 @@ import dagre from "@dagrejs/dagre";
 import { resolveColor, resolveFill } from "./elements.js";
 import { layoutLabels } from "./converter.js";
 import { edgePoint, centre } from "./geometry.js";
+import { checkIds, checkNumber } from "./validate.js";
 
 /**
  * Run dagre over the graph and return simplified elements ready for
@@ -27,6 +28,11 @@ import { edgePoint, centre } from "./geometry.js";
  * @param {{nodes: Array, edges: Array, direction?: string, title?: string}} graph
  */
 export async function layoutGraph({ nodes, edges, direction = "TB", title = null }) {
+  // A duplicate name used to be accepted and then quietly collapse into one
+  // shape, while the reply still counted both nodes.
+  const problems = checkIds(nodes.map((n) => n.id));
+  if (problems.length) throw new Error(`Cannot draw this graph: ${problems.join(" ")}`);
+
   const sized = await sizeNodes(nodes);
   const edgeLabelWidths = await measureEdgeLabels(edges);
 
@@ -584,7 +590,7 @@ export function parseGraphDSL(dsl) {
         shape: shapeMap[props.shape] || "rectangle",
         color: props.color,
         fill: props.fill || props.color,
-        fontSize: props.size ? parseInt(props.size) : 16,
+        fontSize: props.size ? checkNumber(props.size, `size for node "${id}"`) : 16,
       });
     } else if (keyword === "edge") {
       const arrowIdx = tokens.indexOf("->");

@@ -11,19 +11,40 @@ const HTML_PATH = resolve(__dirname, "converter.html");
 
 let _browser = null;
 let _page = null;
+let _opening = null;
 
+/**
+ * The shared converter page, opened at most once.
+ *
+ * Two tool calls arriving together each used to launch their own browser and
+ * the second overwrote the first, leaving a Chromium running with nobody
+ * holding it. And when startup failed halfway, `_page` stayed set, so the next
+ * call handed out a page that had never finished loading.
+ */
 async function getPage() {
   if (_page && !_page.isClosed()) return _page;
+  if (!_opening) _opening = openPage().finally(() => { _opening = null; });
+  return _opening;
+}
 
+async function openPage() {
   const { chromium } = await import("playwright");
   if (!_browser?.isConnected()) {
     _browser = await chromium.launch({ args: ["--no-sandbox", "--disable-setuid-sandbox"] });
   }
-  _page = await _browser.newPage();
-  await _page.goto(`file://${HTML_PATH}`, { waitUntil: "networkidle", timeout: 30000 });
-  await _page.waitForFunction("window.__READY__ === true", { timeout: 15000 });
-  await warmUpFonts(_page);
-  return _page;
+  // Kept local until it is actually usable, so a failure leaves nothing behind
+  // for the next call to trip over.
+  const page = await _browser.newPage();
+  try {
+    await page.goto(`file://${HTML_PATH}`, { waitUntil: "networkidle", timeout: 30000 });
+    await page.waitForFunction("window.__READY__ === true", { timeout: 15000 });
+    await warmUpFonts(page);
+  } catch (err) {
+    await page.close().catch(() => {});
+    throw err;
+  }
+  _page = page;
+  return page;
 }
 
 /**
