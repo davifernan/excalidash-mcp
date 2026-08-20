@@ -30,8 +30,12 @@ test("the bundled converter works offline and measures with warmed Excalifont", 
     assert.ok(diagnostics.fonts.length >= 200, "the warm-up registered Excalidraw's font faces");
     assert.deepEqual(diagnostics.blockedNetworkRequests, []);
   } catch (error) {
-    if (/Operation not permitted|sandbox_host_linux|setsockopt: Operation not permitted/.test(error.message)) {
-      t.skip("this test runner blocks Chromium processes at the OS boundary");
+    // Skipping here is invisible in a summary line, so the workflow runs this
+    // on a non-root runner where sandboxing does work and treats a skip as a
+    // failure. Locally, a machine without user namespaces would otherwise fail
+    // every run for a reason that has nothing to do with the code.
+    if (/Operation not permitted|sandbox_host_linux|setsockopt: Operation not permitted|sandboxing failed/i.test(error.message)) {
+      t.skip("this machine cannot start a sandboxed Chromium; the CI job covers it");
       return;
     }
     throw error;

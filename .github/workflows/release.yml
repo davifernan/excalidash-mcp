@@ -28,7 +28,19 @@ jobs:
         run: node -e 'const expected=`v${require("./package.json").version}`; if(process.env.TAG!==expected) throw new Error(`Tag ${process.env.TAG} does not match ${expected}`)'
       - run: npm install
       - run: npx playwright install --with-deps chromium
-      - run: npm test
+      # The bundled-converter test skips itself on a machine that cannot start a
+      # sandboxed Chromium. That is right for a laptop and wrong here: this is
+      # the run that has to actually prove the offline bundle and the font
+      # warm-up work, and a skip would pass unnoticed in the summary line.
+      - name: Run tests, and refuse a silent skip of the converter test
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.txt
+          if grep -q "^# skipped [1-9]" test-output.txt; then
+            echo "::error::A test skipped on the runner. The converter test must actually run here."
+            grep -n "SKIP\|# Subtest" test-output.txt | tail -20
+            exit 1
+          fi
       - name: Verify generated bundle is current
         run: |
           npm run build
