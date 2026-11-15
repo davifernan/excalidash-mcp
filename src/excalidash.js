@@ -65,6 +65,9 @@ export class ExcaliDashProvider {
     this.authCookies = [];
     this.socket = null;
     this.joinedRooms = new Set();
+    // The identity each room acked us with. A room that refused the join sends
+    // no ack, and a cursor sent there reaches nobody.
+    this.presence = new Map();
     // Who we are signed in as. Sharing needs it: the instance hides the current
     // user from its own lookup, so "share with the agent's own account" would
     // otherwise come back as an unhelpful "no such user".
@@ -377,7 +380,7 @@ export class ExcaliDashProvider {
       throw err;
     }
 
-    socket.on("disconnect", () => this.joinedRooms.clear());
+    socket.on("disconnect", () => { this.joinedRooms.clear(); this.presence.clear(); });
     this.socket = socket;
     return socket;
   }
@@ -468,10 +471,16 @@ export class ExcaliDashProvider {
     return new Promise((resolve) => {
       sock.emit("join-room", { drawingId, user: { name: "Excalidraw-MCP", color: "#1971c2" } }, (ack) => {
         this.joinedRooms.add(drawingId);
+        this.presence.set(drawingId, ack?.user ?? null);
         resolve(ack);
       });
       setTimeout(() => { this.joinedRooms.add(drawingId); resolve(); }, 2000);
     });
+  }
+
+  /** Who the room knows us as, or null if it never let us in. */
+  presenceIn(drawingId) {
+    return this.presence.get(drawingId) ?? null;
   }
 
   /** Close the Socket.IO connection so the process can exit. */
@@ -480,11 +489,18 @@ export class ExcaliDashProvider {
       this.socket.disconnect();
       this.socket = null;
       this.joinedRooms.clear();
+      this.presence.clear();
     }
   }
 
   async pushLive(drawingId, elements, elementOrder) {
     const sock = await this.#getSocket();
     sock.emit("element-update", { drawingId, elements, elementOrder, userId: "excalidraw-mcp" });
+  }
+
+  /** Pointer and selection; the server stamps who it is from. */
+  async pushCursor(drawingId, { pointer, button, selectedElementIds }) {
+    const sock = await this.#getSocket();
+    sock.emit("cursor-move", { drawingId, pointer, button, selectedElementIds });
   }
 }

@@ -10,6 +10,7 @@ import { parseDSL, resolveColor, resolveFill } from "./elements.js";
 import { parseGraphDSL, layoutGraph } from "./layout.js";
 import { ExcaliDashProvider } from "./excalidash.js";
 import { commit as commitToBoard } from "./commit.js";
+import { Cursor, cursorEnabled } from "./cursor.js";
 import {
   ACCESS_LEVELS,
   MIN_QUERY_LENGTH,
@@ -32,6 +33,28 @@ const provider = new ExcaliDashProvider();
 
 /** commit(), with this server's provider already bound in. */
 const commit = (boardId, mutate, opts) => commitToBoard(provider, boardId, mutate, opts);
+
+// Off by default: a cursor helps a person watching the agent explain a diagram,
+// and is noise when it batch-redraws boards nobody is looking at.
+const agentCursor = new Cursor(provider);
+const cursorByDefault = cursorEnabled(process.env.EXCALIDASH_CURSOR);
+const cursorParam = z.boolean().optional().describe(
+  "Show this server's cursor gliding to what changed, for people watching the board. Default: off unless EXCALIDASH_CURSOR=on");
+
+/**
+ * Follow a write with the cursor, if asked for. The write has already
+ * succeeded either way; the returned note only says when nobody could see the
+ * cursor, so the agent does not believe it pointed at something.
+ */
+async function followWithCursor(boardId, elements, requested) {
+  if (!(requested ?? cursorByDefault) || !elements?.length) return "";
+  try {
+    const r = await agentCursor.point(boardId, elements);
+    return r.shown ? "" : `\nCursor not shown: ${r.reason}.`;
+  } catch (err) {
+    return `\nCursor not shown: ${err.message}`;
+  }
+}
 
 // ============================================================
 // Convert elements via Excalidraw library (Playwright)
@@ -232,7 +255,10 @@ async function pushElements(boardId, newElements, mode = "append", opts = {}) {
       return {
         elements: merged,
         live: [...survivors, ...deleted],
-        value: { total: merged.filter((e) => !e.isDeleted).length, added: newElements.length, url: provider.getUrl(boardId) },
+        value: {
+          total: merged.filter((e) => !e.isDeleted).length, added: newElements.length,
+          url: provider.getUrl(boardId), changed: [...survivors, ...deleted],
+        },
       };
     }
 
@@ -240,7 +266,10 @@ async function pushElements(boardId, newElements, mode = "append", opts = {}) {
     return {
       elements: merged,
       live: convertedNew,
-      value: { total: merged.filter((e) => !e.isDeleted).length, added: newElements.length, url: provider.getUrl(boardId) },
+      value: {
+        total: merged.filter((e) => !e.isDeleted).length, added: newElements.length,
+        url: provider.getUrl(boardId), changed: convertedNew,
+      },
     };
   });
 }
@@ -577,8 +606,9 @@ IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...
     board_id: z.string(),
     scene: z.string().describe("DSL scene (one element per line)"),
     mode: z.enum(["append", "replace", "wipe"]).optional(),
+    cursor: cursorParam,
   }),
-}, async ({ board_id, scene, mode }) => {
+}, async ({ board_id, scene, mode, cursor }) => {
   try {
     const elements = parseDSL(scene);
     if (!elements.length) return { content: [{ type: "text", text: "No valid elements." }], isError: true };
@@ -589,7 +619,8 @@ IMPORTANT: Always give elements descriptive IDs (e.g. 'rect frontend 100,100 ...
       return { content: [{ type: "text", text: `Cannot draw this scene: ${problems.join(" ")}` }], isError: true };
     }
     const r = await pushElements(board_id, elements, mode || "append");
-    return { content: [{ type: "text", text: `Drew ${r.added} elements (${r.total} total). ${r.url}` }] };
+    const note = await followWithCursor(board_id, r.changed, cursor);
+    return { content: [{ type: "text", text: `Drew ${r.added} elements (${r.total} total). ${r.url}${note}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -613,8 +644,9 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
     board_id: z.string(),
     graph: z.string().describe("Graph DSL — node/edge lines, no coordinates"),
     mode: z.enum(["append", "replace", "wipe"]).optional().describe("Default: replace, which clears only what this server drew before; append adds to it; wipe clears the whole board including hand-drawn work"),
+    cursor: cursorParam,
   }),
-}, async ({ board_id, graph, mode }) => {
+}, async ({ board_id, graph, mode, cursor }) => {
   try {
     const parsed = parseGraphDSL(graph);
     if (!parsed.nodes.length) {
@@ -627,7 +659,8 @@ Edge labels: two or three words. One sits mid-arrow, so a longer one reaches ont
     const warn = unknown.length
       ? `\nSkipped ${unknown.length} edge(s) referencing unknown nodes: ${unknown.map(e => `${e.from}->${e.to}`).join(", ")}`
       : "";
-    return { content: [{ type: "text", text: `Drew ${parsed.nodes.length} nodes, ${parsed.edges.length - unknown.length} edges (${parsed.direction}). ${r.url}${warn}` }] };
+    const note = await followWithCursor(board_id, r.changed, cursor);
+    return { content: [{ type: "text", text: `Drew ${parsed.nodes.length} nodes, ${parsed.edges.length - unknown.length} edges (${parsed.direction}). ${r.url}${warn}${note}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -643,8 +676,9 @@ Use mode=append to add another diagram, or mode=wipe only when the entire board 
     board_id: z.string(),
     mermaid: z.string().min(1).max(50000).describe("Mermaid diagram source, including its diagram type declaration"),
     mode: z.enum(["append", "replace", "wipe"]).optional().describe("Default: replace"),
+    cursor: cursorParam,
   }),
-}, async ({ board_id, mermaid, mode }) => {
+}, async ({ board_id, mermaid, mode, cursor }) => {
   try {
     const writeMode = mode || "replace";
     const converted = await editableMermaidElements(mermaid);
@@ -653,7 +687,8 @@ Use mode=append to add another diagram, or mode=wipe only when the entire board 
       alreadyConverted: true,
       preLaidOut: true,
     });
-    return { content: [{ type: "text", text: `Drew Mermaid diagram as ${r.added} editable elements. ${r.url}` }] };
+    const note = await followWithCursor(board_id, r.changed, cursor);
+    return { content: [{ type: "text", text: `Drew Mermaid diagram as ${r.added} editable elements. ${r.url}${note}` }] };
   } catch (err) {
     return {
       content: [{ type: "text", text: `Mermaid syntax or conversion error: ${mermaidErrorMessage(err)} Nothing was written.` }],
@@ -683,8 +718,9 @@ server.registerTool("update_element", {
     board_id: z.string(),
     element_id: z.string(),
     props: z.string().describe('JSON of appearance, geometry or text properties, e.g. {"strokeColor":"#1971c2","x":200}'),
+    cursor: cursorParam,
   }),
-}, async ({ board_id, element_id, props }) => {
+}, async ({ board_id, element_id, props, cursor }) => {
   try {
     const changes = JSON.parse(props);
     let report = null;
@@ -718,7 +754,7 @@ server.registerTool("update_element", {
       const byId = new Map(followers.map(e => [e.id, e]));
       const finalEls = next.map(e => byId.get(e.id) || e);
 
-      report = { applied, protectedKeys, unknown, followers: followers.length, keptArrows };
+      report = { applied, protectedKeys, unknown, followers: followers.length, keptArrows, changed: [updated, ...followers] };
       return { elements: finalEls, live: [updated, ...followers], value: true };
     });
     if (!outcome) return { content: [{ type: "text", text: "Board not found" }], isError: true };
@@ -732,7 +768,8 @@ server.registerTool("update_element", {
       notes.push("The label was re-centred but not re-wrapped; redraw the node if the text no longer fits.");
     }
     const note = notes.filter(Boolean).join(" ");
-    return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(report.applied).join(", ")}). ${provider.getUrl(board_id)}${note ? `\n${note}` : ""}` }] };
+    const cursorNote = await followWithCursor(board_id, report.changed, cursor);
+    return { content: [{ type: "text", text: `Updated "${element_id}" (${Object.keys(report.applied).join(", ")}). ${provider.getUrl(board_id)}${note ? `\n${note}` : ""}${cursorNote}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
@@ -787,14 +824,16 @@ server.registerTool("delete_elements", {
   inputSchema: z.object({
     board_id: z.string(),
     element_ids: z.array(z.string()),
+    cursor: cursorParam,
   }),
-}, async ({ board_id, element_ids }) => {
+}, async ({ board_id, element_ids, cursor }) => {
   try {
     if (element_ids[0] === "all") {
       // "all" means all — including hand-drawn work, which "replace" now
       // deliberately spares.
       const r = await pushElements(board_id, [], "wipe");
-      return { content: [{ type: "text", text: `Cleared the whole board, hand-drawn work included. ${r.url}` }] };
+      const note = await followWithCursor(board_id, r.changed, cursor);
+      return { content: [{ type: "text", text: `Cleared the whole board, hand-drawn work included. ${r.url}${note}` }] };
     }
     let summary = null;
     let missing = null;
@@ -835,7 +874,7 @@ server.registerTool("delete_elements", {
       const finalEls = els.map(e => byId.get(e.id) || e);
 
       const deleted = finalEls.filter(e => deleteSet.has(e.id));
-      summary = { deleted: deleted.length, repaired: repaired.length };
+      summary = { deleted: deleted.length, repaired: repaired.length, changed: deleted };
       return { elements: finalEls, live: [...deleted, ...repaired], value: true };
     });
 
@@ -851,7 +890,44 @@ server.registerTool("delete_elements", {
     }
     if (!outcome) return { content: [{ type: "text", text: "Board not found" }], isError: true };
     const note = summary.repaired ? ` Released ${summary.repaired} reference(s) to them.` : "";
-    return { content: [{ type: "text", text: `Deleted ${summary.deleted} elements.${note} ${provider.getUrl(board_id)}` }] };
+    const cursorNote = await followWithCursor(board_id, summary.changed, cursor);
+    return { content: [{ type: "text", text: `Deleted ${summary.deleted} elements.${note} ${provider.getUrl(board_id)}${cursorNote}` }] };
+  } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
+});
+
+server.registerTool("point_at", {
+  description: `Point this server's cursor at an element or a spot without changing anything, e.g. "look here"
+while explaining a diagram to someone watching the board. The element is selected for a moment, or with
+laser=true circled with a laser trail. Works whatever EXCALIDASH_CURSOR is set to, and fails when the
+cursor cannot be shown.`,
+  inputSchema: z.object({
+    board_id: z.string(),
+    element_id: z.string().optional().describe("Element to point at"),
+    x: z.number().optional().describe("Scene x, to point at a spot instead of an element"),
+    y: z.number().optional().describe("Scene y, to point at a spot instead of an element"),
+    laser: z.boolean().optional(),
+  }),
+}, async ({ board_id, element_id, x, y, laser }) => {
+  try {
+    let targets;
+    let what;
+    if (element_id) {
+      const drawing = await provider.getDrawing(board_id);
+      if (!drawing) return { content: [{ type: "text", text: "Board not found" }], isError: true };
+      const el = (drawing.elements || []).find(e => e.id === element_id && !e.isDeleted);
+      if (!el) return { content: [{ type: "text", text: `Element "${element_id}" not found` }], isError: true };
+      targets = [el];
+      what = `"${element_id}"`;
+    } else if (x !== undefined && y !== undefined) {
+      targets = [{ id: "spot", x, y, width: 0, height: 0 }];
+      what = `${x},${y}`;
+    } else {
+      return { content: [{ type: "text", text: "Give element_id, or both x and y." }], isError: true };
+    }
+
+    const r = await agentCursor.point(board_id, targets, { laser: !!laser, select: !!element_id });
+    if (!r.shown) return { content: [{ type: "text", text: `Cursor not shown: ${r.reason}.` }], isError: true };
+    return { content: [{ type: "text", text: `Pointing at ${what}${laser ? " with the laser" : ""}. ${provider.getUrl(board_id)}` }] };
   } catch (err) { return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true }; }
 });
 
