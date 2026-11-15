@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Show the agent's cursor on the board: `EXCALIDASH_CURSOR=on`, or `cursor: true` on `draw_scene`,
+  `draw_graph`, `draw_mermaid`, `update_element` and `delete_elements`, glides to what changed and
+  selects it for a moment, without delaying the tool result. Off by default.
+- Add `point_at` to point at an element or a spot without editing, optionally with a laser trail.
+- Say in the tool result when the cursor could not be shown, instead of failing silently.
+
 ## 1.1.1 - 2026-08-20
 
 - Ship the ExcaliDash diagramming skill in the npm package.

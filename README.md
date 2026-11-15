@@ -228,6 +228,7 @@ skips the lookup entirely.
 | `list_boards` · `create_board` · `read_board` | Board management |
 | `share_board` | Give a person access to a finished board, or take it away |
 | `update_element` · `delete_elements` · `rename_element` | Edit by name, live |
+| `point_at` | Point the agent's cursor at an element or a spot, optionally with a laser trail |
 | `board_history` · `restore_version` | Browse and restore snapshots<sup>†</sup> |
 | `export_png` | Render a board to PNG, framed on the drawing |
 

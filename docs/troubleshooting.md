@@ -99,3 +99,14 @@ If arrows cut through boxes or labels sit under them, the diagram was probably d
 `draw_scene`, which takes absolute coordinates and leaves layout to whoever wrote them. Use
 `draw_graph` for anything made of boxes and arrows. It describes structure only and runs dagre for
 the geometry.
+
+## The agent's cursor does not show up
+
+The tool result says `Cursor not shown: could not join the board's live room`. ExcaliDash before
+0.6.9 does not accept API keys on Socket.IO, so with a key the agent can only join boards that have a
+share link, as an anonymous guest. Update ExcaliDash, or use email and password.
+
+If the tool result says nothing and you still see no cursor, check that you are not signed in to
+ExcaliDash as the same account the agent uses. The editor skips cursor events that carry your own user
+id, so the agent's cursor is visible to everyone except the account it belongs to. Give the agent its
+own account, as [Setup](setup.md) recommends.

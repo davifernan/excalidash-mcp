@@ -87,6 +87,7 @@ The two proxy hints are required here: a backend running with `TRUST_PROXY` answ
 | `EXCALIDASH_EMAIL` + `EXCALIDASH_PASSWORD` | One of the two | Email and password of the agent user. Only needed when no API key is available. |
 | `EXCALIDASH_PROXY_PROTO` | No | Set to `https` when talking to a `TRUST_PROXY` backend directly |
 | `EXCALIDASH_PROXY_HOST` | No | Hostname for the `Host` header in the same case |
+| `EXCALIDASH_CURSOR` | No | `on` to have the agent's cursor glide to whatever each edit changed, for people watching the board. Default `off`; the tools also take `cursor: true` or `false` per call. With an API key it needs ExcaliDash 0.6.9 or later. |
 | `EXCALIDASH_SHARE_WITH` | No | Share every new board with this person: an email address or user id, optionally `:view` or `:edit` (default `view`, since the agent is still drawing on it) |
 
 ## Running on a PaaS (Coolify, Dokku, …)
